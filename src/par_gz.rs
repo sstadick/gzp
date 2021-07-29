@@ -15,6 +15,11 @@ use tokio::{
 // - [ ] Add tests (proptest?)
 // - [ ] Move from close method to drop method?
 
+// TODOs:
+// - [ ] Add support for BGZIP: http://samtools.github.io/hts-specs/SAMv1.pdf
+//  basically just track lines or something and flush when we would cross 64kb
+//  Also include a bit more header info
+
 // Refereneces:
 // - https://github.com/shevek/parallelgzip/blob/master/src/main/java/org/anarres/parallelgzip/ParallelGZIPOutputStream.java
 // - pbgzip
