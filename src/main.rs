@@ -1,11 +1,10 @@
-use bytes::BytesMut;
+pub mod server;
 use failure::Error;
 use flate2::bufread::GzEncoder;
 use flate2::Compression;
 use futures::executor::block_on;
 use std::io::Read;
 use structopt::StructOpt;
-use tokio::io::AsyncReadExt;
 use tokio::{
     io::AsyncWriteExt,
     sync::mpsc::{self},
