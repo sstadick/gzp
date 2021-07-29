@@ -15,6 +15,11 @@ use tokio::{
 // - [ ] Add tests (proptest?)
 // - [ ] Move from close method to drop method?
 
+// Refereneces:
+// - https://github.com/shevek/parallelgzip/blob/master/src/main/java/org/anarres/parallelgzip/ParallelGZIPOutputStream.java
+// - pbgzip
+// - pigz
+
 // 128 KB I think, same as pigz
 const BUFSIZE: usize = 64 * (1 << 10) * 2;
 
@@ -63,6 +68,13 @@ impl ParGz {
                 while let Some(chunk) = rx.recv().await {
                     // eprintln!("Received a chunk: {}", chunk.len());
                     let task = tokio::task::spawn_blocking(move || {
+                        // TODO:
+                        // - This seems inefficient to create a reader each time
+                        // - keep track of if this is the first block or not so we can write a header
+                        // - I'm assuming this does all the right things under the hood as described here:
+                        //  https://linux.die.net/man/1/pigz
+                        // - Add a "trailer"?
+                        //   - https://github.com/shevek/parallelgzip/blob/af5f5c297e735f3f2df7aa4eb0e19a5810b8aff6/src/main/java/org/anarres/parallelgzip/ParallelGZIPOutputStream.java#L297
                         // eprintln!("Spawned a task to compress chunk");
 
                         let mut buffer = Vec::with_capacity(chunk.len());
@@ -92,7 +104,9 @@ impl ParGz {
         Ok(())
     }
 
-    //TODO: make this impl drop?
+    // TODO:
+    // - make this impl drop?
+    // - maybe name this `finish` like flate2?
     pub fn close(mut self) -> Result<(), ParGzError> {
         self.flush().unwrap();
         drop(self.tx);
