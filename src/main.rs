@@ -1,4 +1,4 @@
-pub mod server;
+pub mod par_gz;
 use failure::Error;
 use flate2::bufread::GzEncoder;
 use flate2::Compression;

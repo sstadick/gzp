@@ -279,6 +279,7 @@ dependencies = [
  "failure",
  "flate2",
  "futures",
+ "num_cpus",
  "structopt",
  "thiserror",
  "tokio",
