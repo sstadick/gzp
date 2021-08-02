@@ -7,7 +7,7 @@ edition = "2018"
 
 [lib]
 name = "par_gz"
-path = "src/par_gz.rs"
+path = "src/lib.rs"
 
 [[bin]]
 name = "gzp"

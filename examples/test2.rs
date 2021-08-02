@@ -5,7 +5,7 @@ fn main() {
     let chunksize = 64 * (1 << 10) * 2;
 
     let stdout = std::io::stdout();
-    let mut writer = ParGz::new(stdout);
+    let mut writer = ParGz::builder(stdout).build();
 
     let stdin = std::io::stdin();
     let mut stdin = stdin.lock();
