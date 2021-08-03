@@ -202,3 +202,42 @@ impl Write for ParGz {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod test {
+    use std::{
+        fs::File,
+        io::{BufReader, BufWriter},
+    };
+
+    use super::*;
+    use flate2::read::GzDecoder;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_simple() {
+        let dir = tempdir().unwrap();
+
+        let output_file = dir.path().join("output.txt");
+        let out_writer = BufWriter::new(File::create(&output_file).unwrap());
+
+        let input = b"
+        This is a longer test than normal to come up with a bunch of text.
+        We'll read just a few lines at a time.
+        ";
+
+        let mut par_gz = ParGz::builder(out_writer).build();
+        par_gz.write_all(input).unwrap();
+        par_gz.finish().unwrap();
+
+        let mut reader = BufReader::new(File::open(output_file).unwrap());
+        let mut result = vec![];
+        reader.read_to_end(&mut result).unwrap();
+
+        let mut gz = GzDecoder::new(&result[..]);
+        let mut bytes = vec![];
+        gz.read_to_end(&mut bytes).unwrap();
+
+        assert_eq!(input.to_vec(), bytes);
+    }
+}

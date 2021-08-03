@@ -20,5 +20,5 @@ fn main() {
         writer.write_all(&buffer).unwrap();
         buffer.clear();
     }
-    writer.close().unwrap();
+    writer.finish().unwrap();
 }
