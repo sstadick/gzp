@@ -10,7 +10,7 @@ Multithreaded gzip encoding.
 
 ## Why?
 
-This crate provides a nearly drop in replacement for `Write` that has will compress chunks of data in parallel and write
+This crate provides a near drop in replacement for `Write` that has will compress chunks of data in parallel and write
 to an underlying writer in the same order that the bytes were handed to the writer. This allows for much faster
 compression of Gzip data.
 
