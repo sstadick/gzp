@@ -1,12 +1,14 @@
 use std::io::{Read, Write};
 
-use gzp::ParGz;
+use flate2::write::GzEncoder;
+use gzp::{Compression, ParGz};
 
 fn main() {
     let chunksize = 64 * (1 << 10) * 2;
 
     let stdout = std::io::stdout();
     let mut writer = ParGz::builder(stdout).build();
+    // let mut writer = GzEncoder::new(stdout, Compression::new(3));
 
     let stdin = std::io::stdin();
     let mut stdin = stdin.lock();

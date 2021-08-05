@@ -80,3 +80,7 @@ fn main() {
 - Check that block is actually smaller than when it started
 - Update the CRC value with each block written
 - Add a BGZF mode + tabix index generation (or create that as its own crate)
+
+## Benchmarks
+
+![benchmarks](./violin.svg)

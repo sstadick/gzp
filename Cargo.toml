@@ -34,3 +34,8 @@ tokio = { version = "1.9.0", features = ["sync", "rt-multi-thread"] }
 [dev-dependencies]
 proptest = "1.0.0"
 tempfile = "3.2.0"
+criterion = "0.3"
+
+[[bench]]
+name = "bench"
+harness = false
