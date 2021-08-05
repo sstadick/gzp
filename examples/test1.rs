@@ -1,5 +1,6 @@
-use par_gz::ParGz;
 use std::{env, fs::File, io::Write};
+
+use par_gz::ParGz;
 
 fn main() {
     let file = env::args().skip(1).next().unwrap();
