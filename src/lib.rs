@@ -1,8 +1,10 @@
 //! Parallel Gzip compression.
 //!
-//! This modeul provides a an implementation of [`Write`] that is backed by an async threadpool that
+//! This module provides a an implementation of [`Write`] that is backed by an async threadpool that
 //! which compresses blocks and writes to the underlying writer. This is very similar to how
 //! [`pigz`](https://zlib.net/pigz/) works.
+//!
+//! The supported encodings can be found in [`Encoder`].
 //!
 //! # References
 //!
@@ -32,7 +34,7 @@
 use std::io::{self, Read, Write};
 
 use bytes::BytesMut;
-use flate2::bufread::GzEncoder;
+use flate2::bufread::{DeflateEncoder, GzEncoder, ZlibEncoder};
 pub use flate2::Compression;
 use futures::executor::block_on;
 use thiserror::Error;
@@ -41,17 +43,29 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 /// 128 KB default buffer size, same as pigz
 const BUFSIZE: usize = 64 * (1 << 10) * 2;
 
+#[derive(Debug, Copy, Clone)]
+pub enum Encoder {
+    /// Gzip [encoding](https://docs.rs/flate2/1.0.20/flate2/read/struct.GzEncoder.html)
+    Gzip { compression_level: Compression },
+    /// Zlib [encoding](https://docs.rs/flate2/1.0.20/flate2/read/struct.ZlibEncoder.html)
+    Zlib { compression_level: Compression },
+    /// Deflate [encoding](https://docs.rs/flate2/1.0.20/flate2/read/struct.DeflateEncoder.html)
+    Deflate { compression_level: Compression },
+    /// Snappy [FrameEncoding](https://docs.rs/snap/1.0.5/snap/write/struct.FrameEncoder.html)
+    Snap,
+}
+
 /// The [`ParGz`] builder.
 #[derive(Debug)]
 pub struct ParGzBuilder<W> {
-    /// The level to compress the output. Defaults to `3`.
-    compression_level: Compression,
     /// The buffersize accumulate before trying to compress it. Defaults to [`BUFSIZE`].
     buffer_size: usize,
     /// The underlying writer to write to.
     writer: W,
     /// The number of threads to use for compression. Defaults to all available threads.
     num_threads: usize,
+    /// The encoder to use
+    encoder: Encoder,
 }
 
 impl<W> ParGzBuilder<W>
@@ -61,10 +75,12 @@ where
     /// Create a new [`ParGzBuilder`] object.
     pub fn new(writer: W) -> Self {
         Self {
-            compression_level: Compression::new(3),
             buffer_size: BUFSIZE,
             writer,
             num_threads: num_cpus::get(),
+            encoder: Encoder::Gzip {
+                compression_level: Compression::new(3),
+            },
         }
     }
 
@@ -75,12 +91,6 @@ where
         self
     }
 
-    /// Set the [`compression_level`](ParGzBuilder.compression_level).
-    pub fn compression_level(mut self, compression_level: Compression) -> Self {
-        self.compression_level = compression_level;
-        self
-    }
-
     /// Set the [`num_threads`](ParGzBuilder.num_threads).
     pub fn num_threads(mut self, num_threads: usize) -> Self {
         assert!(num_threads <= num_cpus::get() && num_threads > 0);
@@ -88,13 +98,19 @@ where
         self
     }
 
+    /// Set the [`encoder`](ParGzBuilder.encoder).
+    pub fn encoder(mut self, encoder: Encoder) -> Self {
+        self.encoder = encoder;
+        self
+    }
+
     /// Create a configured [`ParGz`] object.
     pub fn build(self) -> ParGz {
         let (tx, rx) = mpsc::channel(self.num_threads);
         let buffer_size = self.buffer_size;
-        let handle = std::thread::spawn(move || {
-            ParGz::run(rx, self.writer, self.num_threads, self.compression_level)
-        });
+        let encoder = self.encoder;
+        let handle =
+            std::thread::spawn(move || ParGz::run(rx, self.writer, self.num_threads, encoder));
         ParGz {
             handle,
             tx,
@@ -142,7 +158,7 @@ impl ParGz {
         mut rx: Receiver<BytesMut>,
         mut writer: W,
         num_threads: usize,
-        compression_level: Compression,
+        encoder: Encoder,
     ) -> Result<(), ParGzError>
     where
         W: Write + Send + 'static,
@@ -159,10 +175,22 @@ impl ParGz {
                     let task =
                         tokio::task::spawn_blocking(move || -> Result<Vec<u8>, ParGzError> {
                             let mut buffer = Vec::with_capacity(chunk.len());
-                            let mut gz = snap::read::FrameEncoder::new(&chunk[..]);
-                            // let mut gz: GzEncoder<&[u8]> =
-                            //     GzEncoder::new(&chunk[..], compression_level);
-                            gz.read_to_end(&mut buffer)?;
+                            // TODO: the performance hit for this doesn't seem too bad, but it would be nice to not do this
+                            let mut encoder: Box<dyn Read> = match encoder {
+                                Encoder::Gzip { compression_level } => {
+                                    Box::new(GzEncoder::new(&chunk[..], compression_level))
+                                }
+                                Encoder::Zlib { compression_level } => {
+                                    Box::new(ZlibEncoder::new(&chunk[..], compression_level))
+                                }
+                                Encoder::Deflate { compression_level } => {
+                                    Box::new(DeflateEncoder::new(&chunk[..], compression_level))
+                                }
+                                Encoder::Snap => {
+                                    Box::new(snap::read::FrameEncoder::new(&chunk[..]))
+                                }
+                            };
+                            encoder.read_to_end(&mut buffer)?;
 
                             Ok(buffer)
                         });
@@ -293,7 +321,7 @@ mod test {
         // Compress input to output
         let mut par_gz = ParGz::builder(out_writer)
             .buffer_size(205)
-            .compression_level(Compression::new(2))
+            // .compression_level(Compression::new(2))
             .build();
         par_gz.write_all(&input).unwrap();
         par_gz.finish().unwrap();
@@ -331,7 +359,7 @@ mod test {
         // Compress input to output
         let mut par_gz = ParGz::builder(out_writer)
             .buffer_size(buf_size)
-            .compression_level(Compression::new(comp_lvl))
+            // .compression_level(Compression::new(comp_lvl))
             .num_threads(num_threads)
             .build();
         for chunk in input.chunks(write_size) {
