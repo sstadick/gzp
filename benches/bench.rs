@@ -44,15 +44,28 @@ fn compress_with_flate2(buffer_size: usize, compression_level: u32) {
         writer.write_all(&buffer).unwrap();
         buffer.clear()
     }
-    // while let Ok(bytes_read) = reader.read(&mut buffer) {
-    //     if bytes_read == 0 {
-    //         break;
-    //     }
-    //     writer.write_all(&buffer).unwrap();
-    //     buffer.clear();
-    // }
 
     writer.finish().unwrap();
+}
+
+fn compress_with_snap(buffer_size: usize) {
+    let dir = tempdir().unwrap();
+    let output_file = File::create(dir.path().join("shakespeare_snap.txt.gz")).unwrap();
+    let mut writer = snap::write::FrameEncoder::new(output_file);
+    let mut reader = BufReader::new(File::open("./bench-data/shakespeare.txt").unwrap());
+
+    let mut buffer = Vec::with_capacity(buffer_size);
+    loop {
+        let mut limit = (&mut reader).take(buffer_size as u64);
+        limit.read_to_end(&mut buffer).unwrap();
+        if buffer.is_empty() {
+            break;
+        }
+        writer.write_all(&buffer).unwrap();
+        buffer.clear()
+    }
+
+    writer.flush().unwrap();
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -70,6 +83,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     }
 
     group.bench_function("Flate2", |b| {
+        b.iter(|| compress_with_flate2(buffersize, compression_level))
+    });
+
+    group.bench_function("Snap", |b| {
         b.iter(|| compress_with_flate2(buffersize, compression_level))
     });
     group.finish();
