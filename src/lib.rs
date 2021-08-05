@@ -294,7 +294,6 @@ mod test {
         // Compress input to output
         let mut par_gz = ParGz::builder(out_writer)
             .buffer_size(205)
-            .num_threads(3)
             .compression_level(Compression::new(2))
             .build();
         par_gz.write_all(&input).unwrap();
