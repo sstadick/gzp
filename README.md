@@ -64,10 +64,11 @@ fn main() {
 
 ## TODOs
 
-- Add CI
-- Add header links to README
-- Narrow down tokio features
-- Pass through flate2 features
+- [X] Add CI
+- [X] Add header links to README
+- [ ] Narrow down tokio features
+- [ ] Pass through flate2 features
+- [ ] add changelog
 
 ## Notes
 
