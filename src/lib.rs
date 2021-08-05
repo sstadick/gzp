@@ -23,13 +23,11 @@
 //!
 //! use gzp::ParGz;
 //!
-//! fn main() {
-//!     let mut writer = vec![];
-//!     let mut par_gz = ParGz::builder(writer).build();
-//!     par_gz.write_all(b"This is a first test line\n").unwrap();
-//!     par_gz.write_all(b"This is a second test line\n").unwrap();
-//!     par_gz.finish().unwrap();
-//! }
+//! let mut writer = vec![];
+//! let mut par_gz = ParGz::builder(writer).build();
+//! par_gz.write_all(b"This is a first test line\n").unwrap();
+//! par_gz.write_all(b"This is a second test line\n").unwrap();
+//! par_gz.finish().unwrap();
 //! ```
 use std::io::{self, Read, Write};
 
@@ -319,7 +317,8 @@ mod test {
             input in prop::collection::vec(0..u8::MAX, 1..10_000),
             buf_size in 1..10_000usize,
             comp_lvl in 0..9u32,
-            num_threads in 1..num_cpus::get()
+            num_threads in 1..num_cpus::get(),
+            write_size in 1..10_000usize,
         ) {
         let dir = tempdir().unwrap();
 
@@ -334,7 +333,9 @@ mod test {
             .compression_level(Compression::new(comp_lvl))
             .num_threads(num_threads)
             .build();
-        par_gz.write_all(&input).unwrap();
+        for chunk in input.chunks(write_size) {
+            par_gz.write_all(chunk).unwrap();
+        }
         par_gz.finish().unwrap();
 
         // Read output back in

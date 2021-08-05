@@ -14,6 +14,13 @@ This crate provides a near drop in replacement for `Write` that has will compres
 to an underlying writer in the same order that the bytes were handed to the writer. This allows for much faster
 compression of Gzip data.
 
+## Usage
+
+```toml
+[dependencies]
+gzp = { version = "*", features = ["zlib-ng-compat"] }
+```
+
 ## Examples
 
 Simple example
@@ -61,14 +68,6 @@ fn main() {
     writer.finish().unwrap();
 }
 ```
-
-## TODOs
-
-- [X] Add CI
-- [X] Add header links to README
-- [ ] Narrow down tokio features
-- [ ] Pass through flate2 features
-- [ ] add changelog
 
 ## Notes
 
