@@ -1,29 +1,30 @@
 [package]
 name = "gzp"
+authors = ["Seth Stadick <sstadick@gmail.com>"]
 version = "0.1.0"
 edition = "2018"
+license = "Unlicense/MIT"
+readme = "README.md"
+documentation = "https://docs.rs/gzp"
+homepage = "https://github.com/sstadick/gzp"
+repository = "https://github.com/sstadick/gzp"
+keywords = ["compression", "parallel", "pigz"]
+description = "Parallel Gzip Compression"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-name = "par_gz"
-path = "src/lib.rs"
-
-[[bin]]
 name = "gzp"
-path = "src/main.rs"
+path = "src/lib.rs"
 
 [dependencies]
 bytes = "1.0.1"
-failure = "0.1.8"
-flate2 = {version = "~1", features = ["zlib-ng-compat"], default-features = false }
+flate2 = { version = "~1", features = ["zlib-ng-compat"], default-features = false }
 futures = "0.3.16"
 num_cpus = "1.13.0"
 structopt = "0.3.22"
 thiserror = "1.0.26"
-tokio = {version = "1.9.0", features = ["full"]}
-tracing = "0.1.26"
-tracing-subscriber = "0.2.19"
+tokio = { version = "1.9.0", features = ["full"] }
 
 [dev-dependencies]
 proptest = "1.0.0"

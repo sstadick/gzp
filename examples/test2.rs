@@ -1,5 +1,6 @@
-use par_gz::ParGz;
 use std::io::{Read, Write};
+
+use gzp::ParGz;
 
 fn main() {
     let chunksize = 64 * (1 << 10) * 2;

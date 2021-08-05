@@ -1,6 +1,18 @@
-# gzp
+# ⛓️gzp
+
+<p align="center">
+  <a href="https://github.com/sstadick/gzp/actions?query=workflow%3Aci"><img src="https://github.com/sstadick/gzp/workflows/ci/badge.svg" alt="Build Status"></a>
+  <img src="https://img.shields.io/crates/l/gzp.svg" alt="license">
+  <a href="https://crates.io/crates/gzp"><img src="https://img.shields.io/crates/v/gzp.svg?colorB=319e8c" alt="Version info"></a><br>
+</p>
 
 Multithreaded gzip encoding.
+
+## Why?
+
+This crate provides a nearly drop in replacement for `Write` that has will compress chunks of data in parallel and write
+to an underlying writer in the same order that the bytes were handed to the writer. This allows for much faster
+compression of Gzip data.
 
 ## Examples
 
@@ -9,7 +21,7 @@ Simple example
 ```rust
 use std::{env, fs::File, io::Write};
 
-use par_gz::ParGz;
+use gzp::ParGz;
 
 fn main() {
     let file = env::args().skip(1).next().unwrap();
@@ -24,7 +36,7 @@ fn main() {
 An updated version of [pgz](https://github.com/vorner/pgz).
 
 ```rust
-use par_gz::ParGz;
+use gzp::ParGz;
 use std::io::{Read, Write};
 
 fn main() {
@@ -54,6 +66,8 @@ fn main() {
 
 - Add CI
 - Add header links to README
+- Narrow down tokio features
+- Pass through flate2 features
 
 ## Notes
 
