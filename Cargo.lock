@@ -213,7 +213,7 @@ dependencies = [
 
 [[package]]
 name = "gzp"
-version = "0.2.0"
+version = "0.2.1-alpha.0"
 dependencies = [
  "bytes",
  "flate2",
