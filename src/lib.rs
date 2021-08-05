@@ -47,10 +47,6 @@ const BUFSIZE: usize = 64 * (1 << 10) * 2;
 pub enum Encoder {
     /// Gzip [encoding](https://docs.rs/flate2/1.0.20/flate2/read/struct.GzEncoder.html)
     Gzip { compression_level: Compression },
-    /// Zlib [encoding](https://docs.rs/flate2/1.0.20/flate2/read/struct.ZlibEncoder.html)
-    Zlib { compression_level: Compression },
-    /// Deflate [encoding](https://docs.rs/flate2/1.0.20/flate2/read/struct.DeflateEncoder.html)
-    Deflate { compression_level: Compression },
     /// Snappy [FrameEncoding](https://docs.rs/snap/1.0.5/snap/write/struct.FrameEncoder.html)
     Snap,
 }
@@ -179,12 +175,6 @@ impl ParGz {
                             let mut encoder: Box<dyn Read> = match encoder {
                                 Encoder::Gzip { compression_level } => {
                                     Box::new(GzEncoder::new(&chunk[..], compression_level))
-                                }
-                                Encoder::Zlib { compression_level } => {
-                                    Box::new(ZlibEncoder::new(&chunk[..], compression_level))
-                                }
-                                Encoder::Deflate { compression_level } => {
-                                    Box::new(DeflateEncoder::new(&chunk[..], compression_level))
                                 }
                                 Encoder::Snap => {
                                     Box::new(snap::read::FrameEncoder::new(&chunk[..]))
@@ -345,40 +335,44 @@ mod test {
         fn test_all(
             input in prop::collection::vec(0..u8::MAX, 1..10_000),
             buf_size in 1..10_000usize,
-            comp_lvl in 0..9u32,
             num_threads in 1..num_cpus::get(),
             write_size in 1..10_000usize,
         ) {
-        let dir = tempdir().unwrap();
+        for encoding in [Encoder::Gzip { compression_level: Compression::new(3)}, Encoder::Snap] {
+            let dir = tempdir().unwrap();
 
-        // Create output file
-        let output_file = dir.path().join("output.txt");
-        let out_writer = BufWriter::new(File::create(&output_file).unwrap());
+            // Create output file
+            let output_file = dir.path().join("output.txt");
+            let out_writer = BufWriter::new(File::create(&output_file).unwrap());
 
 
-        // Compress input to output
-        let mut par_gz = ParGz::builder(out_writer)
-            .buffer_size(buf_size)
-            // .compression_level(Compression::new(comp_lvl))
-            .num_threads(num_threads)
-            .build();
-        for chunk in input.chunks(write_size) {
-            par_gz.write_all(chunk).unwrap();
-        }
-        par_gz.finish().unwrap();
+            // Compress input to output
+            let mut par_gz = ParGz::builder(out_writer)
+                .buffer_size(buf_size)
+                .encoder(encoding)
+                .num_threads(num_threads)
+                .build();
+            for chunk in input.chunks(write_size) {
+                par_gz.write_all(chunk).unwrap();
+            }
+            par_gz.finish().unwrap();
 
-        // Read output back in
-        let mut reader = BufReader::new(File::open(output_file).unwrap());
-        let mut result = vec![];
-        reader.read_to_end(&mut result).unwrap();
+            // Read output back in
+            let mut reader = BufReader::new(File::open(output_file).unwrap());
+            let mut result = vec![];
+            reader.read_to_end(&mut result).unwrap();
 
-        // Decompress it
-        let mut gz = MultiGzDecoder::new(&result[..]);
-        let mut bytes = vec![];
-        gz.read_to_end(&mut bytes).unwrap();
+            // Decompress it
+            let mut gz: Box<dyn Read> = match encoding {
+                Encoder::Gzip { .. } => Box::new(MultiGzDecoder::new(&result[..])),
+                Encoder::Snap => Box::new(snap::read::FrameDecoder::new(&result[..]))
+            };
+            let mut bytes = vec![];
+            gz.read_to_end(&mut bytes).unwrap();
 
-        // Assert decompressed output is equal to input
-        assert_eq!(input.to_vec(), bytes);
+            // Assert decompressed output is equal to input
+            assert_eq!(input.to_vec(), bytes);
+            }
         }
     }
 }

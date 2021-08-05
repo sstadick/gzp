@@ -30,56 +30,6 @@ fn compress_with_gzip(num_threads: usize, buffer_size: usize, compression_level:
     writer.finish().unwrap();
 }
 
-fn compress_with_zlib(num_threads: usize, buffer_size: usize, compression_level: u32) {
-    let dir = tempdir().unwrap();
-    let output_file = File::create(dir.path().join("shakespeare_gzip.txt.gz")).unwrap();
-    let mut writer = ParGz::builder(output_file)
-        .num_threads(num_threads)
-        .encoder(Encoder::Zlib {
-            compression_level: Compression::new(compression_level),
-        })
-        .build();
-    let mut reader = BufReader::new(File::open("./bench-data/shakespeare.txt").unwrap());
-
-    let mut buffer = Vec::with_capacity(buffer_size);
-    loop {
-        let mut limit = (&mut reader).take(buffer_size as u64);
-        limit.read_to_end(&mut buffer).unwrap();
-        if buffer.is_empty() {
-            break;
-        }
-        writer.write_all(&buffer).unwrap();
-        buffer.clear()
-    }
-
-    writer.finish().unwrap();
-}
-
-fn compress_with_deflate(num_threads: usize, buffer_size: usize, compression_level: u32) {
-    let dir = tempdir().unwrap();
-    let output_file = File::create(dir.path().join("shakespeare_gzip.txt.gz")).unwrap();
-    let mut writer = ParGz::builder(output_file)
-        .num_threads(num_threads)
-        .encoder(Encoder::Deflate {
-            compression_level: Compression::new(compression_level),
-        })
-        .build();
-    let mut reader = BufReader::new(File::open("./bench-data/shakespeare.txt").unwrap());
-
-    let mut buffer = Vec::with_capacity(buffer_size);
-    loop {
-        let mut limit = (&mut reader).take(buffer_size as u64);
-        limit.read_to_end(&mut buffer).unwrap();
-        if buffer.is_empty() {
-            break;
-        }
-        writer.write_all(&buffer).unwrap();
-        buffer.clear()
-    }
-
-    writer.finish().unwrap();
-}
-
 fn compress_with_snap(num_threads: usize, buffer_size: usize) {
     let dir = tempdir().unwrap();
     let output_file = File::create(dir.path().join("shakespeare_gzip.txt.gz")).unwrap();
@@ -147,26 +97,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     let buffersize = 64 * (1 << 10);
     let compression_level = 3;
     let mut group = c.benchmark_group("Compression");
-    for num_cpus in [1usize, 4, 8, 12] {
+    for num_cpus in [1usize, 4, 8, 16, 30] {
         group.bench_with_input(
             BenchmarkId::new("Gzip", num_cpus),
             &num_cpus,
             |b, &num_cpus| {
                 b.iter(|| compress_with_gzip(num_cpus, buffersize, compression_level));
-            },
-        );
-        group.bench_with_input(
-            BenchmarkId::new("Zlib", num_cpus),
-            &num_cpus,
-            |b, &num_cpus| {
-                b.iter(|| compress_with_zlib(num_cpus, buffersize, compression_level));
-            },
-        );
-        group.bench_with_input(
-            BenchmarkId::new("Deflate", num_cpus),
-            &num_cpus,
-            |b, &num_cpus| {
-                b.iter(|| compress_with_deflate(num_cpus, buffersize, compression_level));
             },
         );
         group.bench_with_input(
