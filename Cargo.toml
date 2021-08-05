@@ -30,12 +30,12 @@ futures = "0.3.16"
 num_cpus = "1.13.0"
 thiserror = "1.0.26"
 tokio = { version = "1.9.0", features = ["sync", "rt-multi-thread"] }
+snap = "1"
 
 [dev-dependencies]
 proptest = "1.0.0"
 tempfile = "3.2.0"
 criterion = "0.3"
-snap = "1"
 
 [[bench]]
 name = "bench"

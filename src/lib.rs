@@ -159,8 +159,9 @@ impl ParGz {
                     let task =
                         tokio::task::spawn_blocking(move || -> Result<Vec<u8>, ParGzError> {
                             let mut buffer = Vec::with_capacity(chunk.len());
-                            let mut gz: GzEncoder<&[u8]> =
-                                GzEncoder::new(&chunk[..], compression_level);
+                            let mut gz = snap::read::FrameEncoder::new(&chunk[..]);
+                            // let mut gz: GzEncoder<&[u8]> =
+                            //     GzEncoder::new(&chunk[..], compression_level);
                             gz.read_to_end(&mut buffer)?;
 
                             Ok(buffer)
