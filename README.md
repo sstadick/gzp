@@ -6,13 +6,13 @@
   <a href="https://crates.io/crates/gzp"><img src="https://img.shields.io/crates/v/gzp.svg?colorB=319e8c" alt="Version info"></a><br>
 </p>
 
-Multithreaded gzip encoding.
+Multithreaded encoding.
 
 ## Why?
 
 This crate provides a near drop in replacement for `Write` that has will compress chunks of data in parallel and write
 to an underlying writer in the same order that the bytes were handed to the writer. This allows for much faster
-compression of Gzip data.
+compression of data.
 
 ### Supported Encodings:
 
