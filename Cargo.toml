@@ -17,7 +17,10 @@ name = "gzp"
 path = "src/lib.rs"
 
 [features]
-default = ["flate2/default"]
+default = ["pargz", "flate2_default"]
+pargz = []
+parsnap = ["snap"]
+flate2_default = ["flate2/default"]
 zlib = ["flate2/zlib"]
 zlib-ng-compat = ["flate2/zlib-ng-compat"]
 cloudflare_zlib = ["flate2/cloudflare_zlib"]
@@ -25,12 +28,12 @@ rust_backend = ["flate2/miniz_oxide"]
 
 [dependencies]
 bytes = "1.0.1"
-flate2 = { version = "~1", default-features = false }
+flate2 = { version = "~1", default-features = false, optional = true }
 futures = "0.3.16"
 num_cpus = "1.13.0"
 thiserror = "1.0.26"
 tokio = { version = "1.9.0", features = ["sync", "rt-multi-thread"] }
-snap = "1"
+snap = { version = "~1", optional = true }
 
 [dev-dependencies]
 proptest = "1.0.0"
