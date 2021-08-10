@@ -10,7 +10,7 @@ homepage = "https://github.com/sstadick/gzp"
 repository = "https://github.com/sstadick/gzp"
 categories = ["compression", "concurrency"]
 keywords = ["compression", "parallel", "pigz"]
-description = "Parallel Gzip Compression"
+description = "Parallel Compression"
 
 [lib]
 name = "gzp"
@@ -18,16 +18,19 @@ path = "src/lib.rs"
 bench = false
 
 [features]
-default = []
-parsnap_default = ["parsnap"]
-pargz_default = ["pargz", "flate2_default"]
-pargz = [] # pargz enables features within the crate
-parsnap = ["snap"] # parsnap enable features within the crate
-flate2_default = ["flate2/default"]
-zlib = ["flate2/zlib"]
-zlib-ng-compat = ["flate2/zlib-ng-compat"]
-cloudflare_zlib = ["flate2/cloudflare_zlib"]
-rust_backend = ["flate2/miniz_oxide"]
+# Feature Sets
+default = ["deflate_default"]
+snappy_default = ["snap", "deflate_rust"] # needs flate2 for compression type
+deflate_default = ["deflate_zlib_ng"]
+deflate_rust = ["deflate", "flate2/rust_backend"]
+deflate_zlib = ["deflate", "flate2/zlib", "any_zlib", "libz-sys"]
+deflate_zlib_ng = ["deflate", "flate2/zlib-ng-compat", "any_zlib", "libz-sys"]
+deflate_cloudflare_zlib = ["deflate", "flate2/cloudflare_zlib", "any_zlib", "libz-sys"]
+
+# Feature flags used internally
+deflate = []
+snappy = []
+any_zlib = ["flate2/any_zlib"]
 
 [dependencies]
 bytes = "1.0.1"
@@ -37,6 +40,7 @@ thiserror = "1.0.26"
 snap = { version = "~1", optional = true }
 flume = { version = "0.10.8", features = ["async"] }
 rayon = "1.5.1"
+libz-sys = { version = "1.1.3", default-features = false, optional = true }
 
 [dev-dependencies]
 proptest = "1.0.0"

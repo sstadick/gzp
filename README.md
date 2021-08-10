@@ -17,42 +17,36 @@ compression of data.
 ### Supported Encodings:
 
 - Gzip via [flate2](https://docs.rs/flate2/)
+- Zlib via [flate2](https://docs.rs/flate2/)
+- Raw Deflate via [flate2](https://docs.rs/flate2/)
 - Snappy via [rust-snappy](https://docs.rs/snap)
 
 ## Usage / Features
 
-There are no features enabled by default. `pargz_default` enables `pargz` and `flate2_default`. `flate2_default` in turn
-uses the default backed for `flate2`, which, as of this writing is the pure rust backend. `parsnap_default` is just a
-wrapper over `parsnap`, which pulls in the `snap` dependency.
+By default `pgz` has the `deflate_default` feature enabled which brings in the best performing `zlib` inplementation as
+the backend for `flate2`.
 
-The following demonstrate common ways to override the features:
+### Examples
 
-Simple way to enable both `pargz` and `parsnap`:
+- Deflate default
 
 ```toml
 [dependencies]
-gzp = { version = "*", features = ["pargz_default", "parsnap_default"] }
+gzp = { version = "*" }
 ```
 
-Use `pargz` to pull in `flate2` and `zlib-ng-compat` to use the `zlib-ng-compat` backend for `flate2` (most performant).
+- Rust backend, this means that the `Zlib` format will not be available.
 
 ```toml
 [dependencies]
-gzp = { version = "*", features = ["pargz", "zlib-ng-compat"] }
+gzp = { version = "*", default-features = false, features = ["deflate_rust"] }
 ```
 
-To use Snap (could also use `parsnap_default`):
+- Snap only
 
 ```toml
 [dependencies]
-gzp = { version = "*", no_default_features = true, features = ["parsnap"] }
-```
-
-To use both Snap and Gzip with specific backend:
-
-```toml
-[dependencies]
-gzp = { version = "*", no_default_features = true, features = ["parsnap_default", "pargz", "zlib-ng-compat"] }
+gzp = { version = "*", default-features = false, features = ["snap_default"] }
 ```
 
 ## Examples
@@ -62,29 +56,29 @@ Simple example
 ```rust
 use std::{env, fs::File, io::Write};
 
-use gzp::pargz::ParGz;
+use gzp::{deflate::Gzip, parz::ParZ};
 
 fn main() {
     let file = env::args().skip(1).next().unwrap();
     let writer = File::create(file).unwrap();
-    let mut par_gz = ParGz::builder(writer).build();
-    par_gz.write_all(b"This is a first test line\n").unwrap();
-    par_gz.write_all(b"This is a second test line\n").unwrap();
-    par_gz.finish().unwrap();
+    let mut parz: ParZ<Gzip> = ParGz::builder(writer).build();
+    parz.write_all(b"This is a first test line\n").unwrap();
+    parz.write_all(b"This is a second test line\n").unwrap();
+    parz.finish().unwrap();
 }
 ```
 
 An updated version of [pgz](https://github.com/vorner/pgz).
 
 ```rust
-use gzp::pargz::ParGz;
+use gzp::parz::ParZ;
 use std::io::{Read, Write};
 
 fn main() {
     let chunksize = 64 * (1 << 10) * 2;
 
     let stdout = std::io::stdout();
-    let mut writer = ParGz::builder(stdout).build();
+    let mut writer: ParZ<Gzip> = ParZ::builder(stdout).build();
 
     let stdin = std::io::stdin();
     let mut stdin = stdin.lock();
@@ -106,14 +100,14 @@ fn main() {
 Same thing but using Snappy instead.
 
 ```rust
-use gzp::parsnap::ParSnap;
+use gzp::{parz::ParZ, snap::Snap};
 use std::io::{Read, Write};
 
 fn main() {
     let chunksize = 64 * (1 << 10) * 2;
 
     let stdout = std::io::stdout();
-    let mut writer = ParSnap::builder(stdout).build();
+    let mut writer: ParZ<Snap> = ParZ::builder(stdout).build();
 
     let stdin = std::io::stdin();
     let mut stdin = stdin.lock();
@@ -132,16 +126,27 @@ fn main() {
 }
 ```
 
-## Notes
+## Acknowledgements
 
-- Files written with this are just Gzipped blocks catted together and must be read
-  with `flate2::bufread::MultiGzDecoder`.
+- Many of the ideas for this crate were directly inspired by [`pigz`](https://github.com/madler/pigz), including
+  implementation details for some functions.
+
+## Contributing
+
+PRs are very welcome! Please run tests locally and ensure they are passing. May tests are ignored in CI because the CI
+instances don't have enough threads to test them / are too slow.
+
+```bash
+cargo test --all-features && cargo test --all-features -- --ignored
+```
+
+Note that tests will take 30-60s.
 
 ## Future todos
 
-- Explore removing `Bytes` in favor of raw vec
-- Check that block is actually smaller than when it started
-- Update the CRC value with each block written
+-
+- Pull in an adler crate to replace zlib impl (need one that can combine values, probably implement COMB from pigz).
+- Add more metadata to the headers
 - Add a BGZF mode + tabix index generation (or create that as its own crate)
 - Try with https://docs.rs/lzzzz/0.8.0/lzzzz/lz4_hc/fn.compress.html
 
@@ -150,7 +155,7 @@ fn main() {
 All benchmarks were run on the file in `./bench-data/shakespeare.txt` catted together 100 times which creates a rough
 550Mb file.
 
-The primary takeaway here is that you probably want to give `gzp` at least 4 threads. 2 threads breaks even with the
-overhead of orchestrating the multi-threadedness, 4 gives a roughly 3x improvement.
+The primary benchmark takeaway is that with 2 threads `pgz` is about as fast as single threaded. With 4 threads is 2-3x
+faster than single threaded and improves from there. It is recommended to use at least 4 threads.
 
 ![benchmarks](./violin.svg)
