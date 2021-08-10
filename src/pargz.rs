@@ -19,7 +19,7 @@ use bevy_tasks::{ComputeTaskPool, TaskPoolBuilder};
 use bytes::BytesMut;
 use flate2::read::GzEncoder;
 pub use flate2::Compression;
-use flume::{bounded, Receiver, Sender};
+use flume::{bounded, unbounded, Receiver, Sender};
 use futures::executor::block_on;
 
 use crate::{GzpError, BUFSIZE};
@@ -134,7 +134,7 @@ impl ParGz {
             .unwrap();
 
         pool.scope(move |s| {
-            let (out_sender, out_receiver) = bounded(num_threads * 2);
+            let (out_sender, out_receiver) = bounded(num_threads);
             s.spawn(move |_s| {
                 // writer
                 while let Ok(chunk_chan) = out_receiver.recv() {
@@ -146,7 +146,8 @@ impl ParGz {
             });
 
             while let Ok(chunk) = rx.recv() {
-                let (buf_send, buf_recv) = bounded(1);
+                // oneshot channel to send the result over
+                let (buf_send, buf_recv) = unbounded();
                 s.spawn(move |_s| {
                     let mut buffer = Vec::with_capacity(chunk.len());
                     let mut encoder = GzEncoder::new(&chunk[..], compression_level);
@@ -154,6 +155,7 @@ impl ParGz {
 
                     buf_send.send(Ok::<Vec<u8>, GzpError>(buffer)).unwrap();
                 });
+                // Send the receiving end of the result channel
                 out_sender.send(buf_recv).unwrap();
             }
         });
