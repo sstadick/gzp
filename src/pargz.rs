@@ -15,13 +15,16 @@
 //! ```
 use std::io::{self, Read, Write};
 
+use bevy_tasks::{ComputeTaskPool, TaskPoolBuilder};
 use bytes::BytesMut;
 use flate2::read::GzEncoder;
 pub use flate2::Compression;
+use flume::{bounded, Receiver, Sender};
 use futures::executor::block_on;
-use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use crate::{GzpError, BUFSIZE};
+
+// use tokio::sync::mpsc::{self, Receiver, Sender};
 
 /// The [`ParGz`] builder.
 #[derive(Debug)]
@@ -72,7 +75,7 @@ where
 
     /// Create a configured [`ParGz`] object.
     pub fn build(self) -> ParGz {
-        let (tx, rx) = mpsc::channel(self.num_threads);
+        let (tx, rx) = bounded(self.num_threads);
         let buffer_size = self.buffer_size;
         let comp_level = self.compression_level;
         let handle =
@@ -117,49 +120,90 @@ impl ParGz {
     where
         W: Write + Send + 'static,
     {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(num_threads)
-            .build()?;
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build()
+            .unwrap();
 
-        // Spawn the main task
-        rt.block_on(async {
-            let (out_sender, mut out_receiver) = mpsc::channel(num_threads);
-            let compressor = tokio::task::spawn(async move {
-                while let Some(chunk) = rx.recv().await {
-                    let task = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, GzpError> {
-                        let mut buffer = Vec::with_capacity(chunk.len());
-                        let mut encoder = GzEncoder::new(&chunk[..], compression_level);
-                        encoder.read_to_end(&mut buffer)?;
+        let (out_sender, mut out_receiver) = bounded(num_threads);
+        pool.scope(|s| {
+            pool.join(
+                || {
+                    // compressor
+                    while let Ok(chunk) = rx.recv() {
+                        // Create a oneshot channel here
+                        let (buf_send, buf_recv) = bounded(0);
+                        s.spawn(move |_s| {
+                            eprintln!("in compressor");
+                            let mut buffer = Vec::with_capacity(chunk.len());
+                            let mut encoder = GzEncoder::new(&chunk[..], compression_level);
+                            encoder.read_to_end(&mut buffer).unwrap();
 
-                        Ok(buffer)
-                    });
-                    out_sender
-                        .send(task)
-                        .await
-                        .map_err(|_e| GzpError::ChannelSend)?;
-                }
-                Ok::<(), GzpError>(())
-            });
+                            buf_send.send(Ok::<Vec<u8>, GzpError>(buffer)).unwrap();
+                        });
+                        // send the recv end of that channel on out_sender
+                        out_sender.send(buf_recv).unwrap();
+                    }
+                    // I think the out_sender is causing the writer to block for forever
+                    drop(out_sender);
+                },
+                || {
+                    // writer
+                    eprintln!("in writer");
+                    while let Ok(chunk_chan) = out_receiver.recv() {
+                        eprintln!("waiting on oneshot");
+                        eprintln!("Chunk chan status: {:?}", chunk_chan.is_disconnected());
+                        let chunk = chunk_chan.recv().unwrap().unwrap();
+                        eprintln!("Got oneshot");
+                        writer.write_all(&chunk).unwrap();
+                    }
+                    eprintln!("Writer done");
+                    writer.flush().unwrap();
+                },
+            );
+        });
 
-            let writer_task = tokio::task::spawn_blocking(move || -> Result<(), GzpError> {
-                while let Some(chunk) = block_on(out_receiver.recv()) {
-                    let chunk = block_on(chunk)??;
-                    writer.write_all(&chunk)?;
-                }
-                writer.flush()?;
-                Ok(())
-            });
-
-            compressor.await??;
-            writer_task.await??;
-            Ok::<(), GzpError>(())
-        })
+        // // Spawn the main task
+        // rt.clone().spawn(async move {
+        //     let comp_rt = rt.clone();
+        //     let compressor = comp_rt.clone().spawn(async move {
+        //         while let Ok(chunk) = rx.recv_async().await {
+        //             let task = comp_rt.spawn(async move {
+        //                 let mut buffer = Vec::with_capacity(chunk.len());
+        //                 let mut encoder = GzEncoder::new(&chunk[..], compression_level);
+        //                 encoder.read_to_end(&mut buffer)?;
+        //
+        //                 Ok::<Vec<u8>, GzpError>(buffer)
+        //             });
+        //             out_sender
+        //                 .send_async(task)
+        //                 .await
+        //                 .map_err(|_e| GzpError::ChannelSend)?;
+        //         }
+        //         Ok::<(), GzpError>(())
+        //     });
+        //
+        //     let writer_task = rt.clone().spawn(async move {
+        //         while let Ok(chunk) = block_on(out_receiver.recv_async()) {
+        //             let chunk = block_on(chunk)?;
+        //             writer.write_all(&chunk)?;
+        //         }
+        //         writer.flush()?;
+        //         Ok::<(), GzpError>(())
+        //     });
+        //
+        //     compressor.await?;
+        //     writer_task.await?;
+        //     Ok::<(), GzpError>(())
+        // });
+        Ok(())
     }
 
     /// Flush the buffers and wait on all threads to finish working.
     ///
     /// This *MUST* be called before the [`ParGz`] object goes out of scope.
     pub fn finish(mut self) -> Result<(), GzpError> {
+        eprintln!("Called finish");
         self.flush()?;
         drop(self.tx);
         self.handle.join().unwrap()
@@ -172,7 +216,9 @@ impl Write for ParGz {
         self.buffer.extend_from_slice(buf);
         if self.buffer.len() > self.buffer_size {
             let b = self.buffer.split_to(self.buffer_size);
-            block_on(self.tx.send(b)).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            self.tx
+                .send(b)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
             self.buffer
                 .reserve(self.buffer_size.saturating_sub(self.buffer.len()))
         }
@@ -182,7 +228,8 @@ impl Write for ParGz {
 
     /// Flush this output stream, ensuring all intermediately buffered contents are sent.
     fn flush(&mut self) -> std::io::Result<()> {
-        block_on(self.tx.send(self.buffer.split()))
+        self.tx
+            .send(self.buffer.split())
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         Ok(())
     }
