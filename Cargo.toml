@@ -17,9 +17,11 @@ name = "gzp"
 path = "src/lib.rs"
 
 [features]
-default = ["pargz", "flate2_default"]
-pargz = []
-parsnap = ["snap"]
+default = []
+parsnap_default = ["parsnap"]
+pargz_default = ["pargz", "flate2_default"]
+pargz = [] # pargz enables features within the crate
+parsnap = ["snap"] # parsnap enable features within the crate
 flate2_default = ["flate2/default"]
 zlib = ["flate2/zlib"]
 zlib-ng-compat = ["flate2/zlib-ng-compat"]

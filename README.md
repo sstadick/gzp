@@ -21,28 +21,38 @@ compression of data.
 
 ## Usage / Features
 
-The default enabled features are "pargz" and "flate2_default" which enable gzip compression using whater flate2 uses as
-its default backend. To override this can do something like the folowing (choosing from available flate2 backends):
+There are no features enabled by default. `pargz_default` enables `pargz` and `flate2_default`. `flate2_default` in turn
+uses the default backed for `flate2`, which, as of this writing is the pure rust backend. `parsnap_default` is just a
+wrapper over `parsnap`, which pulls in the `snap` dependency.
+
+The following demonstrate common ways to override the features:
+
+Simple way to enable both `pargz` and `parsnap`:
 
 ```toml
 [dependencies]
-gzp = { version = "*", no_default_features = true, features = ["pargz", "zlib-ng-compat"] }
+gzp = { version = "*", features = ["pargz_default", "parsnap_default"] }
 ```
 
-To use "pargz" a backedn must be selected.
+Use `pargz` to pull in `flate2` and `zlib-ng-compat` to use the `zlib-ng-compat` backend for `flate2` (most performant).
 
-To use Snap:
+```toml
+[dependencies]
+gzp = { version = "*", features = ["pargz", "zlib-ng-compat"] }
+```
+
+To use Snap (could also use `parsnap_default`):
 
 ```toml
 [dependencies]
 gzp = { version = "*", no_default_features = true, features = ["parsnap"] }
 ```
 
-To use both Snap and Gzip
+To use both Snap and Gzip with specific backend:
 
 ```toml
 [dependencies]
-gzp = { version = "*", no_default_features = true, features = ["parsnap", "pargz", "zlib-ng-compat"] }
+gzp = { version = "*", no_default_features = true, features = ["parsnap_default", "pargz", "zlib-ng-compat"] }
 ```
 
 ## Examples
@@ -127,33 +137,24 @@ fn main() {
 - Files written with this are just Gzipped blocks catted together and must be read
   with `flate2::bufread::MultiGzDecoder`.
 
-
 ## Future todos
 
 - Explore removing `Bytes` in favor of raw vec
 - Check that block is actually smaller than when it started
 - Update the CRC value with each block written
 - Add a BGZF mode + tabix index generation (or create that as its own crate)
+- Try with https://docs.rs/lzzzz/0.8.0/lzzzz/lz4_hc/fn.compress.html
 
-## Benchmarks 
+## Benchmarks
 
-All benchmarks were run on the file in `./bench-data/shakespeare.txt` catted together 100 times
-which creats a rough 550Mb file.
+All benchmarks were run on the file in `./bench-data/shakespeare.txt` catted together 100 times which creats a rough
+550Mb file.
 
-| Name      | Num Threads | Compression Level | Buffer Size | Time | File Size | 
-| ---       | -           | ----------------- | ----------- | ---- | --------- |
-| Gzip Only | NA          | 3                 | 128 Kb      | 6.6s | 218 Mb    |
-| Gzip      | 1           | 3                 | 128 Kb      | 2.4s | 223 Mb    |
-| Gzip      | 4           | 3                 | 128 Kb      | 1.2s | 223 Mb    |
-| Gzip      | 8           | 3                 | 128 Kb      | 0.8s | 223 Mb    |
-| Gzip      | 16          | 3                 | 128 Kb      | 0.6s | 223 Mb    |
-| Gzip      | 30          | 3                 | 128 Kb      | 0.6s | 223 Mb    |
-| Snap Only | NA          | NA                | 128 Kb      | 1.6s | 333 Mb    |
-| Snap      | 1           | NA                | 128 Kb      | 0.7s | 333 Mb    |
-| Snap      | 4           | NA                | 128 Kb      | 0.5s | 333 Mb    |
-| Snap      | 8           | NA                | 128 Kb      | 0.4s | 333 Mb    |
-| Snap      | 16          | NA                | 128 Kb      | 0.4s | 333 Mb    |
-| Snap      | 30          | NA                | 128 Kb      | 0.4s | 333 Mb    |
-
+| Name | Num Threads | Compression Level | Buffer Size | Time | File Size | | --- | - | ----------------- | -----------
+| ---- | --------- | | Gzip Only | NA | 3 | 128 Kb | 6.6s | 218 Mb | | Gzip | 1 | 3 | 128 Kb | 2.4s | 223 Mb | | Gzip |
+4 | 3 | 128 Kb | 1.2s | 223 Mb | | Gzip | 8 | 3 | 128 Kb | 0.8s | 223 Mb | | Gzip | 16 | 3 | 128 Kb | 0.6s | 223 Mb | |
+Gzip | 30 | 3 | 128 Kb | 0.6s | 223 Mb | | Snap Only | NA | NA | 128 Kb | 1.6s | 333 Mb | | Snap | 1 | NA | 128 Kb |
+0.7s | 333 Mb | | Snap | 4 | NA | 128 Kb | 0.5s | 333 Mb | | Snap | 8 | NA | 128 Kb | 0.4s | 333 Mb | | Snap | 16 | NA |
+128 Kb | 0.4s | 333 Mb | | Snap | 30 | NA | 128 Kb | 0.4s | 333 Mb |
 
 ![benchmarks](./violin.svg)
