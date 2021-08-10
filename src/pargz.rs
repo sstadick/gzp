@@ -20,7 +20,7 @@ use flate2::read::GzEncoder;
 pub use flate2::Compression;
 use flume::{bounded, Receiver, Sender};
 use futures::{
-    executor::{self, block_on, ThreadPoolBuilder},
+    executor::{self, ThreadPoolBuilder},
     task::SpawnExt,
 };
 
@@ -62,7 +62,7 @@ where
 
     /// Set the [`num_threads`](ParGzBuilder.num_threads).
     pub fn num_threads(mut self, num_threads: usize) -> Self {
-        assert!(num_threads <= num_cpus::get() && num_threads > 0);
+        assert!(num_threads <= num_cpus::get() && num_threads > 1);
         self.num_threads = num_threads;
         self
     }
@@ -78,8 +78,9 @@ where
         let (tx, rx) = bounded(self.num_threads);
         let buffer_size = self.buffer_size;
         let comp_level = self.compression_level;
-        let handle =
-            std::thread::spawn(move || ParGz::run(rx, self.writer, self.num_threads, comp_level));
+        let handle = std::thread::spawn(move || {
+            ParGz::run(rx, self.writer, self.num_threads - 1, comp_level)
+        });
         ParGz {
             handle,
             tx,
@@ -105,14 +106,14 @@ impl ParGz {
         ParGzBuilder::new(writer)
     }
 
-    /// Launch the tokio runtime that coordinates the threadpool that does the following:
+    /// Launch the runtime that coordinates the threadpool that does the following:
     ///
     /// 1. Receives chunks of bytes from from the [`ParGz::write`] method.
     /// 2. Spawn a task compressing the chunk of bytes.
     /// 3. Send the future for that task to the writer.
     /// 4. Write the bytes to the underlying writer.
     fn run<W>(
-        mut rx: Receiver<BytesMut>,
+        rx: Receiver<BytesMut>,
         mut writer: W,
         num_threads: usize,
         compression_level: Compression,
@@ -120,10 +121,6 @@ impl ParGz {
     where
         W: Write + Send + 'static,
     {
-        // let rt = tokio::runtime::Builder::new_multi_thread()
-        //     .worker_threads(num_threads)
-        //     .build()?;
-
         let rt = ThreadPoolBuilder::new().pool_size(num_threads).create()?;
 
         // Spawn the main task
@@ -131,31 +128,11 @@ impl ParGz {
             let (out_sender, out_receiver) = bounded(num_threads);
 
             let comp_rt = rt.clone();
-            let compressor = rt
-                .spawn_with_handle(async move {
-                    while let Ok(chunk) = rx.recv_async().await {
-                        let task = comp_rt
-                            .spawn_with_handle(async move {
-                                let mut buffer = Vec::with_capacity(chunk.len());
-                                let mut encoder = GzEncoder::new(&chunk[..], compression_level);
-                                encoder.read_to_end(&mut buffer)?;
-
-                                Ok::<Vec<u8>, GzpError>(buffer)
-                            })
-                            .unwrap();
-                        out_sender
-                            .send_async(task)
-                            .await
-                            .map_err(|_e| GzpError::ChannelSend)?;
-                    }
-                    Ok::<(), GzpError>(())
-                })
-                .unwrap();
 
             let writer_task = rt
                 .spawn_with_handle(async move {
                     while let Ok(chunk) = out_receiver.recv_async().await {
-                        let chunk = chunk.await?;
+                        let chunk: Vec<u8> = chunk.await?;
                         writer.write_all(&chunk)?;
                     }
                     writer.flush()?;
@@ -163,7 +140,23 @@ impl ParGz {
                 })
                 .unwrap();
 
-            compressor.await?;
+            while let Ok(chunk) = rx.recv_async().await {
+                let task = comp_rt
+                    .spawn_with_handle(async move {
+                        let mut buffer = Vec::with_capacity(chunk.len());
+                        let mut encoder = GzEncoder::new(&chunk[..], compression_level);
+                        encoder.read_to_end(&mut buffer)?;
+
+                        Ok::<Vec<u8>, GzpError>(buffer)
+                    })
+                    .unwrap();
+                out_sender
+                    .send_async(task)
+                    .await
+                    .map_err(|_e| GzpError::ChannelSend)?;
+            }
+            drop(out_sender);
+
             writer_task.await?;
             Ok::<(), GzpError>(())
         })
@@ -300,7 +293,7 @@ mod test {
         fn test_all(
             input in prop::collection::vec(0..u8::MAX, 1..10_000),
             buf_size in 1..10_000usize,
-            num_threads in 1..num_cpus::get(),
+            num_threads in 2..num_cpus::get(),
             write_size in 1..10_000usize,
         ) {
             let dir = tempdir().unwrap();

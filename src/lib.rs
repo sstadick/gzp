@@ -54,8 +54,6 @@ pub enum GzpError {
     ChannelSend,
     #[error(transparent)]
     Io(#[from] io::Error),
-    #[error(transparent)]
-    Join(#[from] tokio::task::JoinError),
     #[error("Unknown")]
     Unknown,
 }

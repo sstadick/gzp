@@ -16,9 +16,12 @@
 use std::io::{self, Read, Write};
 
 use bytes::BytesMut;
-use futures::executor::block_on;
+use flume::{bounded, Receiver, Sender};
+use futures::{
+    executor::{self, ThreadPoolBuilder},
+    task::SpawnExt,
+};
 use snap::read::FrameEncoder;
-use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use crate::{GzpError, BUFSIZE};
 
@@ -55,16 +58,17 @@ where
 
     /// Set the [`num_threads`](ParSnapBuilder.num_threads).
     pub fn num_threads(mut self, num_threads: usize) -> Self {
-        assert!(num_threads <= num_cpus::get() && num_threads > 0);
+        assert!(num_threads <= num_cpus::get() && num_threads > 1);
         self.num_threads = num_threads;
         self
     }
 
     /// Create a configured [`ParSnap`] object.
     pub fn build(self) -> ParSnap {
-        let (tx, rx) = mpsc::channel(self.num_threads);
+        let (tx, rx) = bounded(self.num_threads);
         let buffer_size = self.buffer_size;
-        let handle = std::thread::spawn(move || ParSnap::run(rx, self.writer, self.num_threads));
+        let handle =
+            std::thread::spawn(move || ParSnap::run(rx, self.writer, self.num_threads - 1));
         ParSnap {
             handle,
             tx,
@@ -96,45 +100,47 @@ impl ParSnap {
     /// 2. Spawn a task compressing the chunk of bytes.
     /// 3. Send the future for that task to the writer.
     /// 4. Write the bytes to the underlying writer.
-    fn run<W>(mut rx: Receiver<BytesMut>, mut writer: W, num_threads: usize) -> Result<(), GzpError>
+    fn run<W>(rx: Receiver<BytesMut>, mut writer: W, num_threads: usize) -> Result<(), GzpError>
     where
         W: Write + Send + 'static,
     {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(num_threads)
-            .build()?;
+        let rt = ThreadPoolBuilder::new().pool_size(num_threads).create()?;
 
         // Spawn the main task
-        rt.block_on(async {
-            let (out_sender, mut out_receiver) = mpsc::channel(num_threads);
-            let compressor = tokio::task::spawn(async move {
-                while let Some(chunk) = rx.recv().await {
-                    let task = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, GzpError> {
+        executor::block_on(async {
+            let (out_sender, out_receiver) = bounded(num_threads);
+
+            let comp_rt = rt.clone();
+
+            let writer_task = rt
+                .spawn_with_handle(async move {
+                    while let Ok(chunk) = out_receiver.recv_async().await {
+                        let chunk: Vec<u8> = chunk.await?;
+                        writer.write_all(&chunk)?;
+                    }
+                    writer.flush()?;
+                    Ok::<(), GzpError>(())
+                })
+                .unwrap();
+
+            while let Ok(chunk) = rx.recv_async().await {
+                let task = comp_rt
+                    .spawn_with_handle(async move {
                         let mut buffer = Vec::with_capacity(chunk.len());
                         let mut encoder = FrameEncoder::new(&chunk[..]);
                         encoder.read_to_end(&mut buffer)?;
 
-                        Ok(buffer)
-                    });
-                    out_sender
-                        .send(task)
-                        .await
-                        .map_err(|_e| GzpError::ChannelSend)?;
-                }
-                Ok::<(), GzpError>(())
-            });
+                        Ok::<Vec<u8>, GzpError>(buffer)
+                    })
+                    .unwrap();
+                out_sender
+                    .send_async(task)
+                    .await
+                    .map_err(|_e| GzpError::ChannelSend)?;
+            }
+            drop(out_sender);
 
-            let writer_task = tokio::task::spawn_blocking(move || -> Result<(), GzpError> {
-                while let Some(chunk) = block_on(out_receiver.recv()) {
-                    let chunk = block_on(chunk)??;
-                    writer.write_all(&chunk)?;
-                }
-                writer.flush()?;
-                Ok(())
-            });
-
-            compressor.await??;
-            writer_task.await??;
+            writer_task.await?;
             Ok::<(), GzpError>(())
         })
     }
@@ -155,7 +161,9 @@ impl Write for ParSnap {
         self.buffer.extend_from_slice(buf);
         if self.buffer.len() > self.buffer_size {
             let b = self.buffer.split_to(self.buffer_size);
-            block_on(self.tx.send(b)).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            self.tx
+                .send(b)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
             self.buffer
                 .reserve(self.buffer_size.saturating_sub(self.buffer.len()))
         }
@@ -165,7 +173,8 @@ impl Write for ParSnap {
 
     /// Flush this output stream, ensuring all intermediately buffered contents are sent.
     fn flush(&mut self) -> std::io::Result<()> {
-        block_on(self.tx.send(self.buffer.split()))
+        self.tx
+            .send(self.buffer.split())
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         Ok(())
     }
@@ -267,7 +276,7 @@ mod test {
         fn test_all(
             input in prop::collection::vec(0..u8::MAX, 1..10_000),
             buf_size in 1..10_000usize,
-            num_threads in 1..num_cpus::get(),
+            num_threads in 2..num_cpus::get(),
             write_size in 1..10_000usize,
         ) {
             let dir = tempdir().unwrap();
