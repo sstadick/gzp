@@ -61,8 +61,15 @@ where
     }
 
     /// Set the [`num_threads`](ParGzBuilder.num_threads).
+    ///
+    /// gzp requires at least 4 threads:
+    ///
+    /// - 1 for the runtime itself
+    /// - 1 for the compressor coordinator
+    /// - 1 for the writer
+    /// - 1 or more for doing compression
     pub fn num_threads(mut self, num_threads: usize) -> Self {
-        assert!(num_threads <= num_cpus::get() && num_threads > 0);
+        assert!(num_threads <= num_cpus::get() && num_threads > 3);
         self.num_threads = num_threads;
         self
     }
@@ -78,8 +85,9 @@ where
         let (tx, rx) = bounded(self.num_threads);
         let buffer_size = self.buffer_size;
         let comp_level = self.compression_level;
-        let handle =
-            std::thread::spawn(move || ParGz::run(rx, self.writer, self.num_threads, comp_level));
+        let handle = std::thread::spawn(move || {
+            ParGz::run(rx, self.writer, self.num_threads - 1, comp_level)
+        });
         ParGz {
             handle,
             tx,
@@ -112,7 +120,7 @@ impl ParGz {
     /// 3. Send the future for that task to the writer.
     /// 4. Write the bytes to the underlying writer.
     fn run<W>(
-        mut rx: Receiver<BytesMut>,
+        rx: Receiver<BytesMut>,
         mut writer: W,
         num_threads: usize,
         compression_level: Compression,
@@ -125,77 +133,31 @@ impl ParGz {
             .build()
             .unwrap();
 
-        let (out_sender, mut out_receiver) = bounded(num_threads);
-        pool.scope(|s| {
-            pool.join(
-                || {
-                    // compressor
-                    while let Ok(chunk) = rx.recv() {
-                        // Create a oneshot channel here
-                        let (buf_send, buf_recv) = bounded(0);
-                        s.spawn(move |_s| {
-                            eprintln!("in compressor");
-                            let mut buffer = Vec::with_capacity(chunk.len());
-                            let mut encoder = GzEncoder::new(&chunk[..], compression_level);
-                            encoder.read_to_end(&mut buffer).unwrap();
+        pool.scope(move |s| {
+            let (out_sender, out_receiver) = bounded(num_threads * 2);
+            s.spawn(move |_s| {
+                // writer
+                while let Ok(chunk_chan) = out_receiver.recv() {
+                    let chunk_chan: Receiver<Result<Vec<u8>, GzpError>> = chunk_chan;
+                    let chunk = chunk_chan.recv().unwrap().unwrap();
+                    writer.write_all(&chunk).unwrap();
+                }
+                writer.flush().unwrap();
+            });
 
-                            buf_send.send(Ok::<Vec<u8>, GzpError>(buffer)).unwrap();
-                        });
-                        // send the recv end of that channel on out_sender
-                        out_sender.send(buf_recv).unwrap();
-                    }
-                    // I think the out_sender is causing the writer to block for forever
-                    drop(out_sender);
-                },
-                || {
-                    // writer
-                    eprintln!("in writer");
-                    while let Ok(chunk_chan) = out_receiver.recv() {
-                        eprintln!("waiting on oneshot");
-                        eprintln!("Chunk chan status: {:?}", chunk_chan.is_disconnected());
-                        let chunk = chunk_chan.recv().unwrap().unwrap();
-                        eprintln!("Got oneshot");
-                        writer.write_all(&chunk).unwrap();
-                    }
-                    eprintln!("Writer done");
-                    writer.flush().unwrap();
-                },
-            );
+            while let Ok(chunk) = rx.recv() {
+                let (buf_send, buf_recv) = bounded(1);
+                s.spawn(move |_s| {
+                    let mut buffer = Vec::with_capacity(chunk.len());
+                    let mut encoder = GzEncoder::new(&chunk[..], compression_level);
+                    encoder.read_to_end(&mut buffer).unwrap();
+
+                    buf_send.send(Ok::<Vec<u8>, GzpError>(buffer)).unwrap();
+                });
+                out_sender.send(buf_recv).unwrap();
+            }
         });
 
-        // // Spawn the main task
-        // rt.clone().spawn(async move {
-        //     let comp_rt = rt.clone();
-        //     let compressor = comp_rt.clone().spawn(async move {
-        //         while let Ok(chunk) = rx.recv_async().await {
-        //             let task = comp_rt.spawn(async move {
-        //                 let mut buffer = Vec::with_capacity(chunk.len());
-        //                 let mut encoder = GzEncoder::new(&chunk[..], compression_level);
-        //                 encoder.read_to_end(&mut buffer)?;
-        //
-        //                 Ok::<Vec<u8>, GzpError>(buffer)
-        //             });
-        //             out_sender
-        //                 .send_async(task)
-        //                 .await
-        //                 .map_err(|_e| GzpError::ChannelSend)?;
-        //         }
-        //         Ok::<(), GzpError>(())
-        //     });
-        //
-        //     let writer_task = rt.clone().spawn(async move {
-        //         while let Ok(chunk) = block_on(out_receiver.recv_async()) {
-        //             let chunk = block_on(chunk)?;
-        //             writer.write_all(&chunk)?;
-        //         }
-        //         writer.flush()?;
-        //         Ok::<(), GzpError>(())
-        //     });
-        //
-        //     compressor.await?;
-        //     writer_task.await?;
-        //     Ok::<(), GzpError>(())
-        // });
         Ok(())
     }
 
@@ -203,10 +165,10 @@ impl ParGz {
     ///
     /// This *MUST* be called before the [`ParGz`] object goes out of scope.
     pub fn finish(mut self) -> Result<(), GzpError> {
-        eprintln!("Called finish");
         self.flush()?;
         drop(self.tx);
-        self.handle.join().unwrap()
+        let r = self.handle.join().unwrap();
+        r
     }
 }
 
@@ -331,7 +293,7 @@ mod test {
         fn test_all(
             input in prop::collection::vec(0..u8::MAX, 1..10_000),
             buf_size in 1..10_000usize,
-            num_threads in 1..num_cpus::get(),
+            num_threads in 4..num_cpus::get(),
             write_size in 1..10_000usize,
         ) {
             let dir = tempdir().unwrap();

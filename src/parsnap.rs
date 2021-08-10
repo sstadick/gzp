@@ -55,7 +55,7 @@ where
 
     /// Set the [`num_threads`](ParSnapBuilder.num_threads).
     pub fn num_threads(mut self, num_threads: usize) -> Self {
-        assert!(num_threads <= num_cpus::get() && num_threads > 0);
+        assert!(num_threads <= num_cpus::get() && num_threads > 1);
         self.num_threads = num_threads;
         self
     }
@@ -64,7 +64,8 @@ where
     pub fn build(self) -> ParSnap {
         let (tx, rx) = mpsc::channel(self.num_threads);
         let buffer_size = self.buffer_size;
-        let handle = std::thread::spawn(move || ParSnap::run(rx, self.writer, self.num_threads));
+        let handle =
+            std::thread::spawn(move || ParSnap::run(rx, self.writer, self.num_threads - 1));
         ParSnap {
             handle,
             tx,
@@ -267,7 +268,7 @@ mod test {
         fn test_all(
             input in prop::collection::vec(0..u8::MAX, 1..10_000),
             buf_size in 1..10_000usize,
-            num_threads in 1..num_cpus::get(),
+            num_threads in 2..num_cpus::get(),
             write_size in 1..10_000usize,
         ) {
             let dir = tempdir().unwrap();
