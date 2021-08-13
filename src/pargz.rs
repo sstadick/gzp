@@ -59,7 +59,7 @@ where
 
     /// Set the [`num_threads`](ParGzBuilder.num_threads).
     pub fn num_threads(mut self, num_threads: usize) -> Self {
-        assert!(num_threads <= num_cpus::get() && num_threads > 0);
+        assert!(num_threads <= num_cpus::get() && num_threads > 1);
         self.num_threads = num_threads;
         self
     }
@@ -75,8 +75,9 @@ where
         let (tx, rx) = mpsc::channel(self.num_threads);
         let buffer_size = self.buffer_size;
         let comp_level = self.compression_level;
-        let handle =
-            std::thread::spawn(move || ParGz::run(rx, self.writer, self.num_threads, comp_level));
+        let handle = std::thread::spawn(move || {
+            ParGz::run(rx, self.writer, self.num_threads - 1, comp_level)
+        });
         ParGz {
             handle,
             tx,
@@ -126,6 +127,12 @@ impl ParGz {
             let (out_sender, mut out_receiver) = mpsc::channel(num_threads);
             let compressor = tokio::task::spawn(async move {
                 while let Some(chunk) = rx.recv().await {
+                    // let task = tokio::task::spawn(async move  {
+                    //     let mut buffer = Vec::with_capacity(chunk.len());
+                    //     let mut encoder = GzEncoder::new(&chunk[..], compression_level);
+                    //     encoder.read_to_end(&mut buffer)?;
+                    //     Ok::<Vec<u8>, GzpError>(buffer)
+                    // });
                     let task = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, GzpError> {
                         let mut buffer = Vec::with_capacity(chunk.len());
                         let mut encoder = GzEncoder::new(&chunk[..], compression_level);
@@ -149,6 +156,14 @@ impl ParGz {
                 writer.flush()?;
                 Ok(())
             });
+            // let writer_task = tokio::task::spawn(async move  {
+            //     while let Some(chunk) = out_receiver.recv().await {
+            //         let chunk = chunk.await??;
+            //         writer.write_all(&chunk)?;
+            //     }
+            //     writer.flush()?;
+            //     Ok::<(), GzpError>(())
+            // });
 
             compressor.await??;
             writer_task.await??;
@@ -284,7 +299,7 @@ mod test {
         fn test_all(
             input in prop::collection::vec(0..u8::MAX, 1..10_000),
             buf_size in 1..10_000usize,
-            num_threads in 1..num_cpus::get(),
+            num_threads in 2..num_cpus::get(),
             write_size in 1..10_000usize,
         ) {
             let dir = tempdir().unwrap();
