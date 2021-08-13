@@ -15,6 +15,7 @@ description = "Parallel Gzip Compression"
 [lib]
 name = "gzp"
 path = "src/lib.rs"
+bench = false
 
 [features]
 default = []
@@ -40,6 +41,7 @@ threadpool = "1.8.1"
 flume = { version = "0.10.8", features = ["async"] }
 bevy_tasks = "0.5.0"
 rayon = "1.5.1"
+crossbeam = "0.8.1"
 
 [dev-dependencies]
 proptest = "1.0.0"
