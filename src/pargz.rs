@@ -129,34 +129,35 @@ impl ParGz {
 
             let comp_rt = rt.clone();
 
+            let compressor = rt.spawn_with_handle(async move {
+                while let Ok(chunk) = rx.recv_async().await {
+                    let task = comp_rt
+                        .spawn_with_handle(async move {
+                            let mut buffer = Vec::with_capacity(chunk.len());
+                            let mut encoder = GzEncoder::new(&chunk[..], compression_level);
+                            encoder.read_to_end(&mut buffer)?;
+
+                            Ok::<Vec<u8>, GzpError>(buffer)
+                        }).unwrap();
+                    out_sender
+                        .send_async(task)
+                        .await
+                        .map_err(|_e| GzpError::ChannelSend)?;
+                }
+                Ok::<(), GzpError>(())
+            }).unwrap();
+
             let writer_task = rt
                 .spawn_with_handle(async move {
-                    while let Ok(chunk) = out_receiver.recv_async().await {
+                    while let Ok(chunk) = out_receiver.recv_async() {
                         let chunk: Vec<u8> = chunk.await?;
                         writer.write_all(&chunk)?;
                     }
                     writer.flush()?;
                     Ok::<(), GzpError>(())
-                })
-                .unwrap();
+                }).unwrap();
 
-            while let Ok(chunk) = rx.recv_async().await {
-                let task = comp_rt
-                    .spawn_with_handle(async move {
-                        let mut buffer = Vec::with_capacity(chunk.len());
-                        let mut encoder = GzEncoder::new(&chunk[..], compression_level);
-                        encoder.read_to_end(&mut buffer)?;
-
-                        Ok::<Vec<u8>, GzpError>(buffer)
-                    })
-                    .unwrap();
-                out_sender
-                    .send_async(task)
-                    .await
-                    .map_err(|_e| GzpError::ChannelSend)?;
-            }
-            drop(out_sender);
-
+            compressor.await?;
             writer_task.await?;
             Ok::<(), GzpError>(())
         })
