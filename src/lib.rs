@@ -38,6 +38,8 @@
 //! ```
 use std::io::{self};
 
+use bytes::BytesMut;
+use flume::{unbounded, Receiver, Sender};
 use thiserror::Error;
 
 #[cfg(feature = "pargz")]
@@ -53,9 +55,33 @@ pub enum GzpError {
     #[error("Failed to send over channel.")]
     ChannelSend,
     #[error(transparent)]
-    Io(#[from] io::Error),
+    ChannelReceive(#[from] flume::RecvError),
     #[error(transparent)]
-    Join(#[from] tokio::task::JoinError),
+    Io(#[from] io::Error),
     #[error("Unknown")]
     Unknown,
+}
+
+/// A message sent from the Par writer to the compressor.
+///
+/// This message holds both the bytes to be compressed and written, as well as the oneshot channel
+/// to send the compressed bytes to the writer.
+#[derive(Debug)]
+pub(crate) struct Message {
+    buffer: BytesMut,
+    oneshot: Sender<Result<Vec<u8>, GzpError>>,
+}
+
+impl Message {
+    /// Create a [`Message`] along with its oneshot channel.
+    pub(crate) fn new_parts(buffer: BytesMut) -> (Self, Receiver<Result<Vec<u8>, GzpError>>) {
+        let (tx, rx) = unbounded();
+        (
+            Message {
+                buffer,
+                oneshot: tx,
+            },
+            rx,
+        )
+    }
 }
