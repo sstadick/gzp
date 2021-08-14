@@ -13,15 +13,17 @@
 //! par_gz.write_all(b"This is a second test line\n").unwrap();
 //! par_gz.finish().unwrap();
 //! ```
-use std::io::{self, Read, Write};
+use std::io::{self, Cursor, Read, Write};
 
 use bytes::BytesMut;
+use flate2::bufread::DeflateEncoder;
 use flate2::read::GzEncoder;
 pub use flate2::Compression;
+use flate2::Crc;
 use flume::{bounded, unbounded, Receiver, Sender, TryRecvError};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
-use crate::{GzpError, Message, BUFSIZE};
+use crate::{generic_gzip_header, gzip_footer, GzpError, Message, BUFSIZE};
 
 /// The [`ParGz`] builder.
 #[derive(Debug)]
@@ -106,7 +108,7 @@ where
 pub struct ParGz {
     handle: std::thread::JoinHandle<Result<(), GzpError>>,
     tx_compressor: Sender<Message>,
-    tx_writer: Sender<Receiver<Result<Vec<u8>, GzpError>>>,
+    tx_writer: Sender<Receiver<Result<(Crc, Vec<u8>), GzpError>>>,
     buffer: BytesMut,
     buffer_size: usize,
 }
@@ -128,7 +130,7 @@ impl ParGz {
     /// 4. Write the bytes to the underlying writer.
     fn run<W>(
         rx: Receiver<Message>,
-        rx_writer: Receiver<Receiver<Result<Vec<u8>, GzpError>>>,
+        rx_writer: Receiver<Receiver<Result<(Crc, Vec<u8>), GzpError>>>,
         mut writer: W,
         num_threads: usize,
         compression_level: Compression,
@@ -165,13 +167,15 @@ impl ParGz {
                         }
                         let result = queue.into_par_iter().try_for_each(|m| {
                             let chunk = m.buffer;
+                            let mut crc = Crc::new();
+                            crc.update(&chunk);
                             let mut buffer = Vec::with_capacity(chunk.len());
-                            let mut encoder = GzEncoder::new(&chunk[..], compression_level);
-                            // let mut encoder = DeflateEncoder::new(&chunk[..], compression_level);
+                            // let mut encoder = GzEncoder::new(&chunk[..], compression_level);
+                            let mut encoder = DeflateEncoder::new(&chunk[..], compression_level);
                             encoder.read_to_end(&mut buffer)?;
 
                             m.oneshot
-                                .send(Ok::<Vec<u8>, GzpError>(buffer))
+                                .send(Ok::<(Crc, Vec<u8>), GzpError>((crc, buffer)))
                                 .map_err(|_e| GzpError::ChannelSend)?;
                             Ok::<(), GzpError>(())
                         });
@@ -190,11 +194,16 @@ impl ParGz {
             });
 
             // writer
+            writer.write_all(&generic_gzip_header(compression_level));
+            let mut running_crc = Crc::new();
             while let Ok(chunk_chan) = rx_writer.recv() {
-                let chunk_chan: Receiver<Result<Vec<u8>, GzpError>> = chunk_chan;
-                let chunk = chunk_chan.recv()??;
+                let chunk_chan: Receiver<Result<(Crc, Vec<u8>), GzpError>> = chunk_chan;
+                let (crc, chunk) = chunk_chan.recv()??;
+                running_crc.combine(&crc);
                 writer.write_all(&chunk)?;
             }
+            let footer = gzip_footer(running_crc, vec![]);
+            writer.write_all(&footer)?;
             writer.flush()?;
             thread_rx.recv()??;
             Ok::<(), GzpError>(())
