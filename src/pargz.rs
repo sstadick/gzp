@@ -16,16 +16,18 @@
 use std::io::{self, Read, Write};
 
 use bytes::BytesMut;
-use flate2::read::GzEncoder;
+use flate2::read::{GzEncoder, DeflateEncoder};
 pub use flate2::Compression;
-use flume::{bounded, unbounded, Receiver, Sender, TryRecvError};
-// use crossbeam::channel::{Receiver, Sender, bounded, unbounded, TryRecvError};
+use itertools::Itertools;
+use flume::{bounded, unbounded, Receiver, Sender, RecvError, TryRecvError};
+// use crossbeam::channel::{Receiver, Sender, bounded, unbounded, RecvError};
 
 use crate::{GzpError, BUFSIZE};
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelBridge};
 use rayon::iter::ParallelIterator;
-use futures::StreamExt;
+use flate2::GzHeader;
 
+#[derive(Debug)]
 struct Message {
     buffer: BytesMut,
     oneshot: Sender<Result<Vec<u8>, GzpError>>
@@ -106,13 +108,14 @@ where
         let handle = std::thread::spawn(move || {
             ParGz::run(rx_compressor, rx_writer, self.writer, self.num_threads - 1, comp_level)
         });
-        ParGz {
+        let this = ParGz {
             handle,
             tx_compressor,
             tx_writer,
             buffer: BytesMut::with_capacity(buffer_size),
             buffer_size,
-        }
+        };
+        this
     }
 }
 
@@ -156,18 +159,16 @@ impl ParGz {
 
         pool.in_place_scope(move |s| {
 
-            s.spawn(move |_s| {
-
+            s.spawn(move |s| {
                 while let Ok(message) = rx.recv() {
                     let mut queue = vec![message];
-
                     loop {
                         if queue.len() == num_threads {
                             break
                         }
                         match rx.try_recv() {
                             Ok(message) => queue.push(message),
-                            Err(TryRecvError::Disconnected) => break,
+                            Err(TryRecvError::Disconnected) => if rx.is_empty() { break },
                             Err(TryRecvError::Empty) => ()
                         }
                     }
@@ -175,32 +176,13 @@ impl ParGz {
                         let chunk = m.buffer;
                         let mut buffer = Vec::with_capacity(chunk.len());
                         let mut encoder = GzEncoder::new(&chunk[..], compression_level);
+                        // let mut encoder = DeflateEncoder::new(&chunk[..], compression_level);
                         encoder.read_to_end(&mut buffer).unwrap();
 
                         m.oneshot.send(Ok::<Vec<u8>, GzpError>(buffer)).unwrap();
                     })
                 }
             });
-
-            // let (out_sender, out_receiver) = bounded(num_threads);
-            // s.spawn_fifo(move |s| {
-            //     while let Ok(chunk) = rx.recv() {
-            //         // oneshot channel to send the result over
-            //         let (buf_send, buf_recv) = unbounded();
-            //         s.spawn_fifo(move |_s| {
-            //             let mut buffer = Vec::with_capacity(chunk.len());
-            //             let mut encoder = GzEncoder::new(&chunk[..], compression_level);
-            //             encoder.read_to_end(&mut buffer).unwrap();
-            //
-            //             buf_send.send(Ok::<Vec<u8>, GzpError>(buffer)).unwrap();
-            //         });
-            //         // Send the receiving end of the result channel
-            //         out_sender.send(buf_recv).unwrap();
-            //     }
-            // });
-
-
-
 
             // writer
             while let Ok(chunk_chan) = rx_writer.recv() {
