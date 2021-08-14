@@ -92,14 +92,13 @@ where
                 comp_level,
             )
         });
-        let this = ParGz {
+        ParGz {
             handle,
             tx_compressor,
             tx_writer,
             buffer: BytesMut::with_capacity(buffer_size),
             buffer_size,
-        };
-        this
+        }
     }
 }
 
