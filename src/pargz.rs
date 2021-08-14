@@ -203,6 +203,7 @@ impl ParGz {
                 writer.write_all(&chunk)?;
             }
             let footer = gzip_footer(running_crc, vec![]);
+            writer.write_all(&generic_gzip_header(compression_level));
             writer.write_all(&footer)?;
             writer.flush()?;
             thread_rx.recv()??;
