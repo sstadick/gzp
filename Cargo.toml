@@ -15,6 +15,7 @@ description = "Parallel Gzip Compression"
 [lib]
 name = "gzp"
 path = "src/lib.rs"
+bench = false
 
 [features]
 default = []
@@ -31,11 +32,11 @@ rust_backend = ["flate2/miniz_oxide"]
 [dependencies]
 bytes = "1.0.1"
 flate2 = { version = "~1", default-features = false, optional = true }
-futures = "0.3.16"
 num_cpus = "1.13.0"
 thiserror = "1.0.26"
-tokio = { version = "1.9.0", features = ["sync", "rt-multi-thread"] }
 snap = { version = "~1", optional = true }
+flume = { version = "0.10.8", features = ["async"] }
+rayon = "1.5.1"
 
 [dev-dependencies]
 proptest = "1.0.0"

@@ -18,10 +18,10 @@ use std::io::{self, Read, Write};
 use bytes::BytesMut;
 use flate2::read::GzEncoder;
 pub use flate2::Compression;
-use futures::executor::block_on;
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use flume::{bounded, unbounded, Receiver, Sender, TryRecvError};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
-use crate::{GzpError, BUFSIZE};
+use crate::{GzpError, Message, BUFSIZE};
 
 /// The [`ParGz`] builder.
 #[derive(Debug)]
@@ -58,8 +58,15 @@ where
     }
 
     /// Set the [`num_threads`](ParGzBuilder.num_threads).
+    ///
+    /// gzp requires at least 4 threads:
+    ///
+    /// - 1 for the runtime itself
+    /// - 1 for the compressor coordinator
+    /// - 1 for the writer
+    /// - 1 or more for doing compression
     pub fn num_threads(mut self, num_threads: usize) -> Self {
-        assert!(num_threads <= num_cpus::get() && num_threads > 0);
+        assert!(num_threads <= num_cpus::get() && num_threads > 1);
         self.num_threads = num_threads;
         self
     }
@@ -72,14 +79,23 @@ where
 
     /// Create a configured [`ParGz`] object.
     pub fn build(self) -> ParGz {
-        let (tx, rx) = mpsc::channel(self.num_threads);
+        let (tx_compressor, rx_compressor) = bounded(self.num_threads);
+        let (tx_writer, rx_writer) = bounded(self.num_threads);
         let buffer_size = self.buffer_size;
         let comp_level = self.compression_level;
-        let handle =
-            std::thread::spawn(move || ParGz::run(rx, self.writer, self.num_threads, comp_level));
+        let handle = std::thread::spawn(move || {
+            ParGz::run(
+                rx_compressor,
+                rx_writer,
+                self.writer,
+                self.num_threads - 1,
+                comp_level,
+            )
+        });
         ParGz {
             handle,
-            tx,
+            tx_compressor,
+            tx_writer,
             buffer: BytesMut::with_capacity(buffer_size),
             buffer_size,
         }
@@ -88,7 +104,8 @@ where
 
 pub struct ParGz {
     handle: std::thread::JoinHandle<Result<(), GzpError>>,
-    tx: Sender<BytesMut>,
+    tx_compressor: Sender<Message>,
+    tx_writer: Sender<Receiver<Result<Vec<u8>, GzpError>>>,
     buffer: BytesMut,
     buffer_size: usize,
 }
@@ -109,7 +126,8 @@ impl ParGz {
     /// 3. Send the future for that task to the writer.
     /// 4. Write the bytes to the underlying writer.
     fn run<W>(
-        mut rx: Receiver<BytesMut>,
+        rx: Receiver<Message>,
+        rx_writer: Receiver<Receiver<Result<Vec<u8>, GzpError>>>,
         mut writer: W,
         num_threads: usize,
         compression_level: Compression,
@@ -117,43 +135,71 @@ impl ParGz {
     where
         W: Write + Send + 'static,
     {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(num_threads)
-            .build()?;
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build()
+            .unwrap();
 
-        // Spawn the main task
-        rt.block_on(async {
-            let (out_sender, mut out_receiver) = mpsc::channel(num_threads);
-            let compressor = tokio::task::spawn(async move {
-                while let Some(chunk) = rx.recv().await {
-                    let task = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, GzpError> {
-                        let mut buffer = Vec::with_capacity(chunk.len());
-                        let mut encoder = GzEncoder::new(&chunk[..], compression_level);
-                        encoder.read_to_end(&mut buffer)?;
+        pool.in_place_scope(move |s| -> Result<(), GzpError> {
+            let (thread_tx, thread_rx) = unbounded();
+            s.spawn(move |_s| {
+                let result: Result<(), GzpError> = {
+                    while let Ok(message) = rx.recv() {
+                        let mut queue = vec![message];
+                        loop {
+                            if queue.len() >= num_threads {
+                                break;
+                            }
+                            match rx.try_recv() {
+                                Ok(message) => {
+                                    queue.push(message);
+                                }
+                                Err(TryRecvError::Disconnected) => {
+                                    if rx.is_empty() {
+                                        break;
+                                    }
+                                }
+                                Err(TryRecvError::Empty) => (),
+                            }
+                        }
+                        let result = queue.into_par_iter().try_for_each(|m| {
+                            let chunk = m.buffer;
+                            let mut buffer = Vec::with_capacity(chunk.len());
+                            let mut encoder = GzEncoder::new(&chunk[..], compression_level);
+                            // let mut encoder = DeflateEncoder::new(&chunk[..], compression_level);
+                            encoder.read_to_end(&mut buffer)?;
 
-                        Ok(buffer)
-                    });
-                    out_sender
-                        .send(task)
-                        .await
-                        .map_err(|_e| GzpError::ChannelSend)?;
-                }
-                Ok::<(), GzpError>(())
+                            m.oneshot
+                                .send(Ok::<Vec<u8>, GzpError>(buffer))
+                                .map_err(|_e| GzpError::ChannelSend)?;
+                            Ok::<(), GzpError>(())
+                        });
+                        if result.is_err() {
+                            thread_tx
+                                .send(result)
+                                .expect("Failed to send thread result");
+                            break;
+                        }
+                    }
+                    Ok(())
+                };
+                thread_tx
+                    .send(result)
+                    .expect("Failed to send thread result");
             });
 
-            let writer_task = tokio::task::spawn_blocking(move || -> Result<(), GzpError> {
-                while let Some(chunk) = block_on(out_receiver.recv()) {
-                    let chunk = block_on(chunk)??;
-                    writer.write_all(&chunk)?;
-                }
-                writer.flush()?;
-                Ok(())
-            });
-
-            compressor.await??;
-            writer_task.await??;
+            // writer
+            while let Ok(chunk_chan) = rx_writer.recv() {
+                let chunk_chan: Receiver<Result<Vec<u8>, GzpError>> = chunk_chan;
+                let chunk = chunk_chan.recv()??;
+                writer.write_all(&chunk)?;
+            }
+            writer.flush()?;
+            thread_rx.recv()??;
             Ok::<(), GzpError>(())
-        })
+        })?;
+
+        Ok(())
     }
 
     /// Flush the buffers and wait on all threads to finish working.
@@ -161,8 +207,12 @@ impl ParGz {
     /// This *MUST* be called before the [`ParGz`] object goes out of scope.
     pub fn finish(mut self) -> Result<(), GzpError> {
         self.flush()?;
-        drop(self.tx);
-        self.handle.join().unwrap()
+        drop(self.tx_compressor);
+        drop(self.tx_writer);
+        match self.handle.join() {
+            Ok(result) => result,
+            Err(e) => std::panic::resume_unwind(e),
+        }
     }
 }
 
@@ -172,7 +222,13 @@ impl Write for ParGz {
         self.buffer.extend_from_slice(buf);
         if self.buffer.len() > self.buffer_size {
             let b = self.buffer.split_to(self.buffer_size);
-            block_on(self.tx.send(b)).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            let (m, r) = Message::new_parts(b);
+            self.tx_writer
+                .send(r)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            self.tx_compressor
+                .send(m)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
             self.buffer
                 .reserve(self.buffer_size.saturating_sub(self.buffer.len()))
         }
@@ -182,7 +238,12 @@ impl Write for ParGz {
 
     /// Flush this output stream, ensuring all intermediately buffered contents are sent.
     fn flush(&mut self) -> std::io::Result<()> {
-        block_on(self.tx.send(self.buffer.split()))
+        let (m, r) = Message::new_parts(self.buffer.split());
+        self.tx_writer
+            .send(r)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        self.tx_compressor
+            .send(m)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         Ok(())
     }
@@ -284,7 +345,7 @@ mod test {
         fn test_all(
             input in prop::collection::vec(0..u8::MAX, 1..10_000),
             buf_size in 1..10_000usize,
-            num_threads in 1..num_cpus::get(),
+            num_threads in 2..num_cpus::get(),
             write_size in 1..10_000usize,
         ) {
             let dir = tempdir().unwrap();

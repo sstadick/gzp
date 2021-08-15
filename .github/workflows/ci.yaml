@@ -80,4 +80,4 @@ jobs:
         uses: Swatinem/rust-cache@v1
 
       - name: Run tests
-        run: cargo test --verbose --features parsnap_default,pargz_default
+        run: cargo test --verbose --features parsnap_default,pargz_default -- test_simple test_regression

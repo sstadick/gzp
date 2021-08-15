@@ -147,25 +147,10 @@ fn main() {
 
 ## Benchmarks
 
-All benchmarks were run on the file in `./bench-data/shakespeare.txt` catted together 100 times which creats a rough
+All benchmarks were run on the file in `./bench-data/shakespeare.txt` catted together 100 times which creates a rough
 550Mb file.
 
-Note that there are far more comprehensive comparisons of the tradeoffs in differet compression algorithms / compression
-levels elsewhere on the interent. This is meant to give rough understanding of the tradoffs involved. 
-
-| Name | Num Threads | Compression Level | Buffer Size | Time | File Size |
-| --- | - | ----------------- | -----------| ---- | --------- |
-| Gzip Only | NA | 3 | 128 Kb | 6.6s | 218 Mb |
-| Gzip | 1 | 3 | 128 Kb | 2.4s | 223 Mb |
-| Gzip | 4 | 3 | 128 Kb | 1.2s | 223 Mb |
-| Gzip | 8 | 3 | 128 Kb | 0.8s | 223 Mb |
-| Gzip | 16 | 3 | 128 Kb | 0.6s | 223 Mb |
-| Gzip | 30 | 3 | 128 Kb | 0.6s | 223 Mb |
-| Snap Only | NA | NA | 128 Kb | 1.6s | 333 Mb |
-| Snap | 1 | NA | 128 Kb | 0.7s | 333 Mb |
-| Snap | 4 | NA | 128 Kb | 0.5s | 333 Mb |
-| Snap | 8 | NA | 128 Kb | 0.4s | 333 Mb |
-| Snap | 16 | NA | 128 Kb | 0.4s | 333 Mb |
-| Snap | 30 | NA | 128 Kb | 0.4s | 333 Mb |
+The primary takeaway here is that you probably want to give `gzp` at least 4 threads. 2 threads breaks even with the
+overhead of orchestrating the multi-threadedness, 4 gives a roughly 3x improvement.
 
 ![benchmarks](./violin.svg)
