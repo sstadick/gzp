@@ -147,7 +147,10 @@ fn main() {
 
 ## Benchmarks
 
-All benchmarks were run on the file in `./bench-data/shakespeare.txt` catted together 100 times which creats a rough
+All benchmarks were run on the file in `./bench-data/shakespeare.txt` catted together 100 times which creates a rough
 550Mb file.
+
+The primary takeaway here is that you probably want to give `gzp` at least 4 threads. 2 threads breaks even with the
+overhead of orchestrating the multi-threadedness, 4 gives a roughly 3x improvement.
 
 ![benchmarks](./violin.svg)
