@@ -5,10 +5,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use flate2::write::GzEncoder;
 use tempfile::tempdir;
 
-use gzp::{
-    pargz::{Compression, ParGz},
-    parsnap::ParSnap,
-};
+use gzp::pargz::{Compression, ParGz};
 
 fn compress_with_gzip(num_threads: usize, buffer_size: usize, compression_level: u32) {
     let dir = tempdir().unwrap();
@@ -33,27 +30,27 @@ fn compress_with_gzip(num_threads: usize, buffer_size: usize, compression_level:
     writer.finish().unwrap();
 }
 
-fn compress_with_snap(num_threads: usize, buffer_size: usize) {
-    let dir = tempdir().unwrap();
-    let output_file = File::create(dir.path().join("shakespeare_gzip.txt.gz")).unwrap();
-    let mut writer = ParSnap::builder(output_file)
-        .num_threads(num_threads)
-        .build();
-    let mut reader = BufReader::new(File::open("./bench-data/shakespeare.txt").unwrap());
-
-    let mut buffer = Vec::with_capacity(buffer_size);
-    loop {
-        let mut limit = (&mut reader).take(buffer_size as u64);
-        limit.read_to_end(&mut buffer).unwrap();
-        if buffer.is_empty() {
-            break;
-        }
-        writer.write_all(&buffer).unwrap();
-        buffer.clear()
-    }
-
-    writer.finish().unwrap();
-}
+// fn compress_with_snap(num_threads: usize, buffer_size: usize) {
+//     let dir = tempdir().unwrap();
+//     let output_file = File::create(dir.path().join("shakespeare_gzip.txt.gz")).unwrap();
+//     let mut writer = ParSnap::builder(output_file)
+//         .num_threads(num_threads)
+//         .build();
+//     let mut reader = BufReader::new(File::open("./bench-data/shakespeare.txt").unwrap());
+//
+//     let mut buffer = Vec::with_capacity(buffer_size);
+//     loop {
+//         let mut limit = (&mut reader).take(buffer_size as u64);
+//         limit.read_to_end(&mut buffer).unwrap();
+//         if buffer.is_empty() {
+//             break;
+//         }
+//         writer.write_all(&buffer).unwrap();
+//         buffer.clear()
+//     }
+//
+//     writer.finish().unwrap();
+// }
 
 fn compress_with_gzip_only(buffer_size: usize, compression_level: u32) {
     let dir = tempdir().unwrap();
@@ -75,25 +72,25 @@ fn compress_with_gzip_only(buffer_size: usize, compression_level: u32) {
     writer.finish().unwrap();
 }
 
-fn compress_with_snap_only(buffer_size: usize) {
-    let dir = tempdir().unwrap();
-    let output_file = File::create(dir.path().join("shakespeare_snap.txt.gz")).unwrap();
-    let mut writer = snap::write::FrameEncoder::new(output_file);
-    let mut reader = BufReader::new(File::open("./bench-data/shakespeare.txt").unwrap());
-
-    let mut buffer = Vec::with_capacity(buffer_size);
-    loop {
-        let mut limit = (&mut reader).take(buffer_size as u64);
-        limit.read_to_end(&mut buffer).unwrap();
-        if buffer.is_empty() {
-            break;
-        }
-        writer.write_all(&buffer).unwrap();
-        buffer.clear()
-    }
-
-    writer.flush().unwrap();
-}
+// fn compress_with_snap_only(buffer_size: usize) {
+//     let dir = tempdir().unwrap();
+//     let output_file = File::create(dir.path().join("shakespeare_snap.txt.gz")).unwrap();
+//     let mut writer = snap::write::FrameEncoder::new(output_file);
+//     let mut reader = BufReader::new(File::open("./bench-data/shakespeare.txt").unwrap());
+//
+//     let mut buffer = Vec::with_capacity(buffer_size);
+//     loop {
+//         let mut limit = (&mut reader).take(buffer_size as u64);
+//         limit.read_to_end(&mut buffer).unwrap();
+//         if buffer.is_empty() {
+//             break;
+//         }
+//         writer.write_all(&buffer).unwrap();
+//         buffer.clear()
+//     }
+//
+//     writer.flush().unwrap();
+// }
 
 fn criterion_benchmark(c: &mut Criterion) {
     let buffersize = 64 * (1 << 10);
@@ -107,22 +104,22 @@ fn criterion_benchmark(c: &mut Criterion) {
                 b.iter(|| compress_with_gzip(num_cpus, buffersize, compression_level));
             },
         );
-        group.bench_with_input(
-            BenchmarkId::new("Snap", num_cpus),
-            &num_cpus,
-            |b, &num_cpus| {
-                b.iter(|| compress_with_snap(num_cpus, buffersize));
-            },
-        );
+        // group.bench_with_input(
+        //     BenchmarkId::new("Snap", num_cpus),
+        //     &num_cpus,
+        //     |b, &num_cpus| {
+        //         b.iter(|| compress_with_snap(num_cpus, buffersize));
+        //     },
+        // );
     }
 
     group.bench_function("Gzip Only", |b| {
         b.iter(|| compress_with_gzip_only(buffersize, compression_level))
     });
 
-    group.bench_function("Snap Only", |b| {
-        b.iter(|| compress_with_snap_only(buffersize))
-    });
+    // group.bench_function("Snap Only", |b| {
+    //     b.iter(|| compress_with_snap_only(buffersize))
+    // });
     group.finish();
 }
 

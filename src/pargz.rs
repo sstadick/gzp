@@ -19,7 +19,7 @@ use bytes::BytesMut;
 use flate2::bufread::DeflateEncoder;
 use flate2::read::GzEncoder;
 pub use flate2::Compression;
-use flate2::Crc;
+use flate2::{Compress, Crc, FlushCompress};
 use flume::{bounded, unbounded, Receiver, Sender, TryRecvError};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
@@ -167,13 +167,36 @@ impl ParGz {
                         }
                         let result = queue.into_par_iter().try_for_each(|m| {
                             let chunk = m.buffer;
+                            let mut buffer = Vec::with_capacity(chunk.len() + 32);
+                            // let mut buffer = vec![1; chunk.len() + 8];
+                            // let mut encoder = GzEncoder::new(&chunk[..], compression_level);
+                            // let mut encoder = DeflateEncoder::new(&chunk[..], compression_level);
+                            // let dict_adler = encoder.set_dictionary(&buffer).unwrap();
+                            let mut encoder = Compress::new(compression_level, false);
+                            encoder
+                                .compress_vec(
+                                    &chunk[..],
+                                    &mut buffer,
+                                    if m.is_last {
+                                        FlushCompress::Finish
+                                    } else {
+                                        FlushCompress::Sync
+                                    },
+                                )
+                                .unwrap();
                             let mut crc = Crc::new();
                             crc.update(&chunk);
-                            let mut buffer = Vec::with_capacity(chunk.len());
-                            // let mut encoder = GzEncoder::new(&chunk[..], compression_level);
-                            let mut encoder = DeflateEncoder::new(&chunk[..], compression_level);
-                            encoder.read_to_end(&mut buffer)?;
 
+                            // encoder.read_to_end(&mut buffer)?;
+                            // eprintln!(
+                            //     "Compressed {:?} to {:?}, is_last: {:?}:\n{:?}",
+                            //     chunk.len(),
+                            //     buffer.len(),
+                            //     m.is_last,
+                            //     &buffer
+                            // );
+
+                            // buffer.truncate(encoder.total_out() as usize);
                             m.oneshot
                                 .send(Ok::<(Crc, Vec<u8>), GzpError>((crc, buffer)))
                                 .map_err(|_e| GzpError::ChannelSend)?;
@@ -202,8 +225,9 @@ impl ParGz {
                 running_crc.combine(&crc);
                 writer.write_all(&chunk)?;
             }
+
             let footer = gzip_footer(running_crc, vec![]);
-            writer.write_all(&generic_gzip_header(compression_level));
+            // writer.write_all(&generic_gzip_header(compression_level));
             writer.write_all(&footer)?;
             writer.flush()?;
             thread_rx.recv()??;
@@ -249,7 +273,8 @@ impl Write for ParGz {
 
     /// Flush this output stream, ensuring all intermediately buffered contents are sent.
     fn flush(&mut self) -> std::io::Result<()> {
-        let (m, r) = Message::new_parts(self.buffer.split());
+        let (mut m, r) = Message::new_parts(self.buffer.split());
+        m.is_last = true;
         self.tx_writer
             .send(r)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
@@ -262,12 +287,13 @@ impl Write for ParGz {
 
 #[cfg(test)]
 mod test {
+    use std::process::exit;
     use std::{
         fs::File,
         io::{BufReader, BufWriter},
     };
 
-    use flate2::bufread::MultiGzDecoder;
+    use flate2::bufread::{GzDecoder, MultiGzDecoder};
     use proptest::prelude::*;
     use tempfile::tempdir;
 
@@ -315,6 +341,7 @@ mod test {
         let out_writer = BufWriter::new(File::create(&output_file).unwrap());
 
         // Define input bytes that is 206 bytes long
+        // let input = b"The quick brown fox jumped over the moon\n";
         let input = [
             132, 19, 107, 159, 69, 217, 180, 131, 224, 49, 143, 41, 194, 30, 151, 22, 55, 30, 42,
             139, 219, 62, 123, 44, 148, 144, 88, 233, 199, 126, 110, 65, 6, 87, 51, 215, 17, 253,
@@ -334,16 +361,17 @@ mod test {
             .buffer_size(205)
             // .compression_level(Compression::new(2))
             .build();
-        par_gz.write_all(&input).unwrap();
+        par_gz.write_all(&input[..]).unwrap();
         par_gz.finish().unwrap();
 
         // Read output back in
+        dbg!(&output_file);
         let mut reader = BufReader::new(File::open(output_file).unwrap());
         let mut result = vec![];
         reader.read_to_end(&mut result).unwrap();
 
         // Decompress it
-        let mut gz = MultiGzDecoder::new(&result[..]);
+        let mut gz = GzDecoder::new(&result[..]);
         let mut bytes = vec![];
         gz.read_to_end(&mut bytes).unwrap();
 

@@ -74,6 +74,7 @@ pub enum GzpError {
 pub(crate) struct Message {
     buffer: BytesMut,
     oneshot: Sender<Result<(Crc, Vec<u8>), GzpError>>,
+    is_last: bool,
 }
 
 impl Message {
@@ -86,6 +87,7 @@ impl Message {
             Message {
                 buffer,
                 oneshot: tx,
+                is_last: false,
             },
             rx,
         )
@@ -154,22 +156,17 @@ fn generic_gzip_header(lvl: Compression) -> Vec<u8> {
 }
 
 fn gzip_footer(crc: Crc, mut buffer: Vec<u8>) -> Vec<u8> {
-    let mut crc_bytes_written = 0;
-    while crc_bytes_written < 8 {
-        let (sum, amt) = (crc.sum() as u32, crc.amount());
-        let buf = [
-            (sum >> 0) as u8,
-            (sum >> 8) as u8,
-            (sum >> 16) as u8,
-            (sum >> 24) as u8,
-            (amt >> 0) as u8,
-            (amt >> 8) as u8,
-            (amt >> 16) as u8,
-            (amt >> 24) as u8,
-        ];
-        let n = buffer.write(&buf[crc_bytes_written..]).unwrap();
-        crc_bytes_written += n;
-    }
-
+    let (sum, amt) = (crc.sum() as u32, crc.amount());
+    let buf = [
+        (sum >> 0) as u8,
+        (sum >> 8) as u8,
+        (sum >> 16) as u8,
+        (sum >> 24) as u8,
+        (amt >> 0) as u8,
+        (amt >> 8) as u8,
+        (amt >> 16) as u8,
+        (amt >> 24) as u8,
+    ];
+    buffer.write_all(&buf[..]).unwrap();
     buffer
 }
