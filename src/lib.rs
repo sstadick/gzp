@@ -39,7 +39,7 @@
 use std::ffi::CString;
 use std::io::{self, Write};
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use flate2::{Crc, GzBuilder};
 use flume::{unbounded, Receiver, Sender};
 use thiserror::Error;
@@ -72,21 +72,24 @@ pub enum GzpError {
 /// to send the compressed bytes to the writer.
 #[derive(Debug)]
 pub(crate) struct Message {
-    buffer: BytesMut,
+    buffer: Bytes,
     oneshot: Sender<Result<(Crc, Vec<u8>), GzpError>>,
+    dictionary: Option<Bytes>,
     is_last: bool,
 }
 
 impl Message {
     /// Create a [`Message`] along with its oneshot channel.
     pub(crate) fn new_parts(
-        buffer: BytesMut,
+        buffer: Bytes,
+        dictionary: Option<Bytes>,
     ) -> (Self, Receiver<Result<(Crc, Vec<u8>), GzpError>>) {
         let (tx, rx) = unbounded();
         (
             Message {
                 buffer,
                 oneshot: tx,
+                dictionary,
                 is_last: false,
             },
             rx,
