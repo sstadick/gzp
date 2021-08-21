@@ -1,12 +1,14 @@
 use std::io::{Read, Write};
 
-use gzp::pargz::ParGz;
+use gzp::pargz::{Compression, ParGz};
 
 pub fn main() {
     let chunksize = 64 * (1 << 10) * 2;
 
     let stdout = std::io::stdout();
-    let mut writer = ParGz::builder(stdout).build();
+    let mut writer = ParGz::builder(stdout)
+        .compression_level(Compression::new(6))
+        .build();
 
     let stdin = std::io::stdin();
     let mut stdin = stdin.lock();

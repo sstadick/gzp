@@ -23,9 +23,7 @@ use flate2::{Compress, Crc, FlushCompress};
 use flume::{bounded, unbounded, Receiver, Sender, TryRecvError};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
-use crate::{generic_gzip_header, gzip_footer, GzpError, Message, BUFSIZE};
-
-pub const DICT_SIZE: usize = 32768;
+use crate::{Format, FormatSpec, GzpError, Message, BUFSIZE, DICT_SIZE};
 
 /// The [`ParGz`] builder.
 #[derive(Debug)]
@@ -38,6 +36,8 @@ pub struct ParGzBuilder<W> {
     num_threads: usize,
     /// The compression level of the output, see [`Compression`].
     compression_level: Compression,
+    /// The out file format to use.
+    format: Format,
 }
 
 impl<W> ParGzBuilder<W>
@@ -51,13 +51,19 @@ where
             writer,
             num_threads: num_cpus::get(),
             compression_level: Compression::new(3),
+            format: Format::Gzip,
         }
     }
 
-    /// Set the [`buffer_size`](ParGzBuilder.buffer_size).
+    /// Set the [`format`](ParGzBuilder.format).
+    pub fn format(mut self, format: Format) -> Self {
+        self.format = format;
+        self
+    }
+
+    /// Set the [`buffer_size`](ParGzBuilder.buffer_size). Must be >= [`DICT_SIZE`].
     pub fn buffer_size(mut self, buffer_size: usize) -> Self {
-        // TODO: buffer size must be at least 32k for dictionary
-        assert!(buffer_size > 0);
+        assert!(buffer_size >= DICT_SIZE);
         self.buffer_size = buffer_size;
         self
     }
@@ -88,6 +94,7 @@ where
         let (tx_writer, rx_writer) = bounded(self.num_threads);
         let buffer_size = self.buffer_size;
         let comp_level = self.compression_level;
+        let format = self.format;
         let handle = std::thread::spawn(move || {
             ParGz::run(
                 rx_compressor,
@@ -95,6 +102,7 @@ where
                 self.writer,
                 self.num_threads - 1,
                 comp_level,
+                format,
             )
         });
         let this = ParGz {
@@ -104,6 +112,7 @@ where
             dictionary: None,
             buffer: BytesMut::with_capacity(buffer_size),
             buffer_size,
+            format,
         };
         this
     }
@@ -116,6 +125,7 @@ pub struct ParGz {
     buffer: BytesMut,
     dictionary: Option<Bytes>,
     buffer_size: usize,
+    format: Format,
 }
 
 impl ParGz {
@@ -139,6 +149,7 @@ impl ParGz {
         mut writer: W,
         num_threads: usize,
         compression_level: Compression,
+        format: Format,
     ) -> Result<(), GzpError>
     where
         W: Write + Send + 'static,
@@ -173,10 +184,6 @@ impl ParGz {
                         let result = queue.into_par_iter().try_for_each(|m| {
                             let chunk = m.buffer;
                             let mut buffer = Vec::with_capacity(chunk.len() + 32);
-                            // let mut buffer = vec![1; chunk.len() + 8];
-                            // let mut encoder = GzEncoder::new(&chunk[..], compression_level);
-                            // let mut encoder = DeflateEncoder::new(&chunk[..], compression_level);
-                            // let dict_adler = encoder.set_dictionary(&buffer).unwrap();
                             let mut encoder = Compress::new(compression_level, false);
                             if let Some(dict) = m.dictionary {
                                 encoder.set_dictionary(&dict[..]);
@@ -195,16 +202,6 @@ impl ParGz {
                             let mut crc = Crc::new();
                             crc.update(&chunk);
 
-                            // encoder.read_to_end(&mut buffer)?;
-                            // eprintln!(
-                            //     "Compressed {:?} to {:?}, is_last: {:?}:\n{:?}",
-                            //     chunk.len(),
-                            //     buffer.len(),
-                            //     m.is_last,
-                            //     &buffer
-                            // );
-
-                            // buffer.truncate(encoder.total_out() as usize);
                             m.oneshot
                                 .send(Ok::<(Crc, Vec<u8>), GzpError>((crc, buffer)))
                                 .map_err(|_e| GzpError::ChannelSend)?;
@@ -225,7 +222,7 @@ impl ParGz {
             });
 
             // writer
-            writer.write_all(&generic_gzip_header(compression_level));
+            writer.write_all(&format.header(compression_level));
             let mut running_crc = Crc::new();
             while let Ok(chunk_chan) = rx_writer.recv() {
                 let chunk_chan: Receiver<Result<(Crc, Vec<u8>), GzpError>> = chunk_chan;
@@ -234,9 +231,8 @@ impl ParGz {
                 writer.write_all(&chunk)?;
             }
 
-            let footer = gzip_footer(running_crc, vec![]);
             // writer.write_all(&generic_gzip_header(compression_level));
-            writer.write_all(&footer)?;
+            writer.write_all(&format.footer(running_crc))?;
             writer.flush()?;
             thread_rx.recv()??;
             Ok::<(), GzpError>(())
@@ -249,13 +245,37 @@ impl ParGz {
     ///
     /// This *MUST* be called before the [`ParGz`] object goes out of scope.
     pub fn finish(mut self) -> Result<(), GzpError> {
-        self.flush()?;
+        self.flush_last(true)?;
         drop(self.tx_compressor);
         drop(self.tx_writer);
         match self.handle.join() {
             Ok(result) => result,
             Err(e) => std::panic::resume_unwind(e),
         }
+    }
+
+    /// Flush this output stream, ensuring all intermediately buffered contents are sent.
+    ///
+    /// If this is the last buffer to be sent, set `is_last` to false to trigger compression
+    /// stream completion.
+    fn flush_last(&mut self, is_last: bool) -> std::io::Result<()> {
+        let (mut m, r) = Message::new_parts(
+            self.buffer.split().freeze(),
+            std::mem::replace(&mut self.dictionary, None),
+        );
+        m.is_last = is_last;
+
+        if self.buffer.len() >= DICT_SIZE && !is_last {
+            self.dictionary = Some(m.buffer.slice(m.buffer.len() - DICT_SIZE..))
+        }
+
+        self.tx_writer
+            .send(r)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        self.tx_compressor
+            .send(m)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        Ok(())
     }
 }
 
@@ -283,19 +303,7 @@ impl Write for ParGz {
 
     /// Flush this output stream, ensuring all intermediately buffered contents are sent.
     fn flush(&mut self) -> std::io::Result<()> {
-        // TODO: ensure never called again
-        let (mut m, r) = Message::new_parts(
-            self.buffer.split().freeze(),
-            std::mem::replace(&mut self.dictionary, None),
-        );
-        m.is_last = true;
-        self.tx_writer
-            .send(r)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        self.tx_compressor
-            .send(m)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        Ok(())
+        self.flush_last(false)
     }
 }
 
@@ -307,7 +315,7 @@ mod test {
         io::{BufReader, BufWriter},
     };
 
-    use flate2::bufread::{GzDecoder, MultiGzDecoder};
+    use flate2::bufread::{GzDecoder, MultiGzDecoder, ZlibDecoder};
     use proptest::prelude::*;
     use tempfile::tempdir;
 
@@ -338,7 +346,43 @@ mod test {
         reader.read_to_end(&mut result).unwrap();
 
         // Decompress it
-        let mut gz = MultiGzDecoder::new(&result[..]);
+        let mut gz = GzDecoder::new(&result[..]);
+        let mut bytes = vec![];
+        gz.read_to_end(&mut bytes).unwrap();
+
+        // Assert decompressed output is equal to input
+        assert_eq!(input.to_vec(), bytes);
+    }
+
+    #[test]
+    fn test_simple_zlib() {
+        let dir = tempdir().unwrap();
+
+        // Create output file
+        let output_file = dir.path().join("output.txt");
+        let out_writer = BufWriter::new(File::create(&output_file).unwrap());
+
+        // Define input bytes
+        // let input = b"\
+        // This is a longer test than normal to come up with a bunch of text.\n\
+        // We'll read just a few lines at a time.\n\
+        // ";
+        // let input = b"This is a longer test than normal to come up with a bunch of text.\nWe'll read just a few lines at a time.\n";
+        let input = b"hello,hello";
+
+        // Compress input to output
+        let mut par_gz = ParGz::builder(out_writer).format(Format::Zlib).build();
+        par_gz.write_all(input).unwrap();
+        par_gz.finish().unwrap();
+        dbg!(&output_file);
+        // exit(1);
+        // Read output back in
+        let mut reader = BufReader::new(File::open(output_file).unwrap());
+        let mut result = vec![];
+        reader.read_to_end(&mut result).unwrap();
+
+        // Decompress it
+        let mut gz = ZlibDecoder::new(&result[..]);
         let mut bytes = vec![];
         gz.read_to_end(&mut bytes).unwrap();
 
@@ -413,6 +457,7 @@ mod test {
             let mut par_gz = ParGz::builder(out_writer)
                 .buffer_size(buf_size)
                 .num_threads(num_threads)
+                // .format(Format::Zlib)
                 .build();
             for chunk in input.chunks(write_size) {
                 par_gz.write_all(chunk).unwrap();
@@ -425,7 +470,7 @@ mod test {
             reader.read_to_end(&mut result).unwrap();
 
             // Decompress it
-            let mut gz = MultiGzDecoder::new(&result[..]);
+            let mut gz = GzDecoder::new(&result[..]);
             let mut bytes = vec![];
             gz.read_to_end(&mut bytes).unwrap();
 

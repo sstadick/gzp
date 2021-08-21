@@ -309,6 +309,7 @@ dependencies = [
  "criterion",
  "flate2",
  "flume",
+ "libz-sys",
  "num_cpus",
  "proptest",
  "rayon",
