@@ -5,15 +5,14 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use flate2::write::GzEncoder;
 use tempfile::tempdir;
 
-use gzp::{
-    pargz::{Compression, ParGz},
-    parsnap::ParSnap,
-};
+use gzp::deflate::Gzip;
+use gzp::parz::{Compression, ParZ};
+use gzp::snap::Snap;
 
 fn compress_with_gzip(num_threads: usize, buffer_size: usize, compression_level: u32) {
     let dir = tempdir().unwrap();
     let output_file = File::create(dir.path().join("shakespeare_gzip.txt.gz")).unwrap();
-    let mut writer = ParGz::builder(output_file)
+    let mut writer: ParZ<Gzip> = ParZ::builder(output_file)
         .num_threads(num_threads)
         .compression_level(Compression::new(compression_level))
         .build();
@@ -36,9 +35,7 @@ fn compress_with_gzip(num_threads: usize, buffer_size: usize, compression_level:
 fn compress_with_snap(num_threads: usize, buffer_size: usize) {
     let dir = tempdir().unwrap();
     let output_file = File::create(dir.path().join("shakespeare_gzip.txt.gz")).unwrap();
-    let mut writer = ParSnap::builder(output_file)
-        .num_threads(num_threads)
-        .build();
+    let mut writer: ParZ<Snap> = ParZ::builder(output_file).num_threads(num_threads).build();
     let mut reader = BufReader::new(File::open("./bench-data/shakespeare.txt").unwrap());
 
     let mut buffer = Vec::with_capacity(buffer_size);

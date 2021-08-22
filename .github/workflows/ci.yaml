@@ -27,7 +27,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: check
-          args: --features pargz_default,parsnap_default
+          args: --all-features
 
   lints:
     name: Lints
@@ -57,7 +57,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --features pargz_default,parsnap_default -- -D warnings
+          args: --all-features -- -D warnings
 
   test:
     name: Test Suite
@@ -80,4 +80,4 @@ jobs:
         uses: Swatinem/rust-cache@v1
 
       - name: Run tests
-        run: cargo test --verbose --features parsnap_default,pargz_default -- test_simple test_regression
+        run: cargo test --verbose --all-features
