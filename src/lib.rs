@@ -36,7 +36,7 @@ use std::io;
 use std::process::exit;
 
 use bytes::Bytes;
-use flume::{unbounded, Receiver, Sender};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use thiserror::Error;
 
 use crate::check::Check;
@@ -64,7 +64,7 @@ pub enum GzpError {
     #[error("Failed to send over channel.")]
     ChannelSend,
     #[error(transparent)]
-    ChannelReceive(#[from] flume::RecvError),
+    ChannelReceive(#[from] crossbeam_channel::RecvError),
     #[error(transparent)]
     DeflateCompress(#[from] flate2::CompressError),
     #[error(transparent)]
