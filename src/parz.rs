@@ -15,13 +15,14 @@
 //! parz.finish().unwrap();
 //! # }
 //! ```
-use core::num;
-use std::io::{self, Write};
+use std::{
+    io::{self, Write},
+    thread::JoinHandle,
+};
 
 use bytes::{Bytes, BytesMut};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 pub use flate2::Compression;
-use rayon::iter::{ParallelBridge, ParallelIterator};
 
 use crate::{Check, CompressResult, FormatSpec, GzpError, Message, BUFSIZE, DICT_SIZE};
 
@@ -153,69 +154,74 @@ where
     where
         W: Write + Send + 'static,
     {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(num_threads)
-            .build()?;
-
-        pool.in_place_scope(move |s| -> Result<(), GzpError> {
-            for _ in 0..num_threads {
+        let handles: Vec<JoinHandle<Result<(), GzpError>>> = (0..num_threads)
+            .map(|_| {
                 // let (thread_tx, thread_rx) = unbounded();
                 let rx = rx.clone();
-                s.spawn(move |_s| {
+                std::thread::spawn(move || -> Result<(), GzpError> {
                     while let Ok(m) = rx.recv() {
                         let chunk = &m.buffer;
-                        let buffer = format
-                            .encode(chunk, compression_level, m.dictionary.as_ref(), m.is_last)
-                            .unwrap();
+                        let buffer = format.encode(
+                            chunk,
+                            compression_level,
+                            m.dictionary.as_ref(),
+                            m.is_last,
+                        )?;
                         let mut check = F::create_check();
                         check.update(chunk);
 
                         m.oneshot
                             .send(Ok::<(F::C, Vec<u8>), GzpError>((check, buffer)))
-                            .map_err(|_e| GzpError::ChannelSend)
-                            .unwrap();
+                            .map_err(|_e| GzpError::ChannelSend)?;
                     }
-                });
-            }
+                    Ok(())
+                })
+            })
+            .collect();
 
-            // s.spawn(move |_s| {
-            //     let result: Result<(), GzpError> = rx.iter().par_bridge().try_for_each(|m| {
-            //         let chunk = &m.buffer;
-            //         let buffer = format.encode(
-            //             chunk,
-            //             compression_level,
-            //             m.dictionary.as_ref(),
-            //             m.is_last,
-            //         )?;
-            //         let mut check = F::create_check();
-            //         check.update(chunk);
+        // s.spawn(move |_s| {
+        //     let result: Result<(), GzpError> = rx.iter().par_bridge().try_for_each(|m| {
+        //         let chunk = &m.buffer;
+        //         let buffer = format.encode(
+        //             chunk,
+        //             compression_level,
+        //             m.dictionary.as_ref(),
+        //             m.is_last,
+        //         )?;
+        //         let mut check = F::create_check();
+        //         check.update(chunk);
 
-            //         m.oneshot
-            //             .send(Ok::<(F::C, Vec<u8>), GzpError>((check, buffer)))
-            //             .map_err(|_e| GzpError::ChannelSend)?;
-            //         Ok::<(), GzpError>(())
-            //     });
+        //         m.oneshot
+        //             .send(Ok::<(F::C, Vec<u8>), GzpError>((check, buffer)))
+        //             .map_err(|_e| GzpError::ChannelSend)?;
+        //         Ok::<(), GzpError>(())
+        //     });
 
-            //     thread_tx
-            //         .send(result)
-            //         .expect("Failed to send thread result");
-            // });
+        //     thread_tx
+        //         .send(result)
+        //         .expect("Failed to send thread result");
+        // });
 
-            // writer
-            writer.write_all(&format.header(compression_level))?;
-            let mut running_check = F::create_check();
-            while let Ok(chunk_chan) = rx_writer.recv() {
-                let chunk_chan: Receiver<CompressResult<F::C>> = chunk_chan;
-                let (check, chunk) = chunk_chan.recv()??;
-                running_check.combine(&check);
-                writer.write_all(&chunk)?;
-            }
-            let footer = format.footer(running_check);
-            writer.write_all(&footer)?;
-            writer.flush()?;
-            // thread_rx.recv()??;
-            Ok::<(), GzpError>(())
-        })?;
+        // writer
+        writer.write_all(&format.header(compression_level))?;
+        let mut running_check = F::create_check();
+        while let Ok(chunk_chan) = rx_writer.recv() {
+            let chunk_chan: Receiver<CompressResult<F::C>> = chunk_chan;
+            let (check, chunk) = chunk_chan.recv()??;
+            running_check.combine(&check);
+            writer.write_all(&chunk)?;
+        }
+        let footer = format.footer(running_check);
+        writer.write_all(&footer)?;
+        writer.flush()?;
+        handles
+            .into_iter()
+            .try_for_each(|handle| match handle.join() {
+                Ok(result) => result,
+                Err(e) => std::panic::resume_unwind(e),
+            })?;
+        // thread_rx.recv()??;
+        // Ok::<(), GzpError>(())
 
         Ok(())
     }

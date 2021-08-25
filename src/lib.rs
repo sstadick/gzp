@@ -69,8 +69,8 @@ pub enum GzpError {
     DeflateCompress(#[from] flate2::CompressError),
     #[error(transparent)]
     Io(#[from] io::Error),
-    #[error(transparent)]
-    ThreadPool(#[from] rayon::ThreadPoolBuildError),
+    // #[error(transparent)]
+    // ThreadPool(#[from] rayon::ThreadPoolBuildError),
     #[error("Unknown")]
     Unknown,
 }

@@ -285,7 +285,6 @@ dependencies = [
  "libz-sys",
  "num_cpus",
  "proptest",
- "rayon",
  "snap",
  "tempfile",
  "thiserror",
