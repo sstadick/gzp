@@ -65,14 +65,9 @@ where
         self
     }
 
-    /// Set the [`num_threads`](ParZBuilder.num_threads).
+    /// Set the [`num_threads`](ParZBuilder.num_threads) that will be used for compression.
     ///
-    /// gzp requires at least 4 threads:
-    ///
-    /// - 1 for the runtime itself
-    /// - 1 for the compressor coordinator
-    /// - 1 for the writer
-    /// - 1 or more for doing compression
+    /// Note that one additioanl thread will be used for writing
     pub fn num_threads(mut self, num_threads: usize) -> Self {
         assert!(num_threads > 1);
         self.num_threads = num_threads;
