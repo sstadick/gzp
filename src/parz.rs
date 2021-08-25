@@ -74,7 +74,7 @@ where
     /// - 1 for the writer
     /// - 1 or more for doing compression
     pub fn num_threads(mut self, num_threads: usize) -> Self {
-        assert!(num_threads <= num_cpus::get() && num_threads > 1);
+        assert!(num_threads > 1);
         self.num_threads = num_threads;
         self
     }
@@ -97,7 +97,7 @@ where
                 rx_compressor,
                 rx_writer,
                 self.writer,
-                self.num_threads - 1,
+                self.num_threads,
                 comp_level,
                 format,
             )
