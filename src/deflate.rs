@@ -52,7 +52,7 @@ impl FormatSpec for Gzip {
         &self,
         input: &[u8],
         compression_level: Compression,
-        dict: Option<Bytes>,
+        dict: Option<&Bytes>,
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError> {
         // The plus 16 allows odd small sized blocks to extend up to a byte boundary and end stream
@@ -129,7 +129,7 @@ impl FormatSpec for Zlib {
         &self,
         input: &[u8],
         compression_level: Compression,
-        dict: Option<Bytes>,
+        dict: Option<&Bytes>,
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError> {
         // The plus 16 allows odd small sized blocks to extend up to a byte boundary and end stream
@@ -206,7 +206,7 @@ impl FormatSpec for RawDeflate {
         &self,
         input: &[u8],
         compression_level: Compression,
-        dict: Option<Bytes>,
+        dict: Option<&Bytes>,
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError> {
         // The plus 8 allows odd small sized blocks to extend up to a byte boundary
@@ -369,7 +369,7 @@ mod test {
         fn test_all_gzip(
             input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)),
             buf_size in DICT_SIZE..BUFSIZE,
-            num_threads in 4..num_cpus::get(),
+            num_threads in 1..num_cpus::get(),
             write_size in 1..10_000usize,
         ) {
             let dir = tempdir().unwrap();
@@ -411,7 +411,7 @@ mod test {
         fn test_all_zlib(
             input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)),
             buf_size in DICT_SIZE..BUFSIZE,
-            num_threads in 4..num_cpus::get(),
+            num_threads in 1..num_cpus::get(),
             write_size in 1..10_000usize,
         ) {
             let dir = tempdir().unwrap();

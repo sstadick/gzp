@@ -19,8 +19,8 @@ use std::io::{self, Write};
 
 use bytes::{Bytes, BytesMut};
 pub use flate2::Compression;
-use flume::{bounded, unbounded, Receiver, Sender, TryRecvError};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use flume::{bounded, unbounded, Receiver, Sender};
+use rayon::iter::{ParallelBridge, ParallelIterator};
 
 use crate::{Check, CompressResult, FormatSpec, GzpError, Message, BUFSIZE, DICT_SIZE};
 
@@ -160,30 +160,14 @@ where
             let (thread_tx, thread_rx) = unbounded();
             s.spawn(move |_s| {
                 let result: Result<(), GzpError> = {
-                    while let Ok(message) = rx.recv() {
-                        let mut queue = vec![message];
-                        loop {
-                            if queue.len() >= num_threads {
-                                break;
-                            }
-                            match rx.try_recv() {
-                                Ok(message) => {
-                                    queue.push(message);
-                                }
-                                Err(TryRecvError::Disconnected) => {
-                                    if rx.is_empty() {
-                                        break;
-                                    }
-                                }
-                                Err(TryRecvError::Empty) => (),
-                            }
-                        }
-                        let result = queue.into_par_iter().try_for_each(|m| {
-                            let chunk = m.buffer;
+                    rx.iter()
+                        .par_bridge()
+                        .try_for_each(|m| {
+                            let chunk = &m.buffer;
                             let buffer = format.encode(
                                 &chunk,
                                 compression_level,
-                                m.dictionary,
+                                m.dictionary.as_ref(),
                                 m.is_last,
                             )?;
                             let mut check = F::create_check();
@@ -193,14 +177,9 @@ where
                                 .send(Ok::<(F::C, Vec<u8>), GzpError>((check, buffer)))
                                 .map_err(|_e| GzpError::ChannelSend)?;
                             Ok::<(), GzpError>(())
-                        });
-                        if result.is_err() {
-                            thread_tx
-                                .send(result)
-                                .expect("Failed to send thread result");
-                            break;
-                        }
-                    }
+                        })
+                        .unwrap();
+
                     Ok(())
                 };
                 thread_tx

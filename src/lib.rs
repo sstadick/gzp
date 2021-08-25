@@ -143,7 +143,7 @@ pub trait FormatSpec: Clone + Copy + Debug + Send + Sync + 'static {
         &self,
         input: &[u8],
         compression_level: Compression,
-        dict: Option<Bytes>,
+        dict: Option<&Bytes>,
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError>;
 
