@@ -82,8 +82,8 @@ where
 
     /// Create a configured [`ParZ`] object.
     pub fn build(self) -> ParZ<F> {
-        let (tx_compressor, rx_compressor) = bounded(self.num_threads);
-        let (tx_writer, rx_writer) = bounded(self.num_threads);
+        let (tx_compressor, rx_compressor) = bounded(self.num_threads * 2);
+        let (tx_writer, rx_writer) = bounded(self.num_threads * 2);
         let buffer_size = self.buffer_size;
         let comp_level = self.compression_level;
         let format = self.format;
