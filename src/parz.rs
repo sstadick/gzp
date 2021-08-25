@@ -69,7 +69,7 @@ where
     ///
     /// Note that one additioanl thread will be used for writing
     pub fn num_threads(mut self, num_threads: usize) -> Self {
-        assert!(num_threads > 1);
+        assert!(num_threads >= 1);
         self.num_threads = num_threads;
         self
     }
