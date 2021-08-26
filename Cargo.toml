@@ -21,9 +21,9 @@ bench = false
 # Feature Sets
 default = ["deflate_default"]
 snappy_default = ["snap", "deflate_rust"] # needs flate2 for compression type
-deflate_default = ["deflate_rust"]
+deflate_default = ["deflate_zlib_ng"]
 deflate_rust = ["deflate", "flate2/rust_backend"]
-deflate_zlib = ["deflate", "flate2/zlib", "any_zlib", "libz-sys"]
+deflate_zlib = ["deflate", "flate2/zlib", "any_zlib", "libz-sys", "libz-sys/libc"]
 deflate_zlib_ng = ["deflate", "flate2/zlib-ng-compat", "any_zlib", "libz-sys"]
 deflate_cloudflare_zlib = ["deflate", "flate2/cloudflare_zlib", "any_zlib", "libz-sys"]
 
