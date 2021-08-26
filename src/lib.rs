@@ -19,7 +19,7 @@
 //! # Examples
 //!
 //! ```
-//! # #[cfg(feature = "deflate")] {
+//! # #[cfg(feature = "deflate_default")] {
 //! use std::{env, fs::File, io::Write};
 //!
 //! use gzp::{deflate::Gzip, parz::ParZ};
@@ -36,7 +36,7 @@ use std::io;
 use std::process::exit;
 
 use bytes::Bytes;
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use flume::{unbounded, Receiver, Sender};
 use thiserror::Error;
 
 use crate::check::Check;
@@ -48,6 +48,7 @@ pub mod deflate;
 pub mod parz;
 #[cfg(feature = "snappy")]
 pub mod snap;
+pub mod z;
 
 /// 128 KB default buffer size, same as pigz.
 pub const BUFSIZE: usize = 64 * (1 << 10) * 2;
@@ -61,14 +62,23 @@ pub type CompressResult<C> = Result<(C, Vec<u8>), GzpError>;
 
 #[derive(Error, Debug)]
 pub enum GzpError {
+    #[error("Invalid buffer size ({0}), must be >= {1}")]
+    BufferSize(usize, usize),
+
     #[error("Failed to send over channel.")]
     ChannelSend,
+
     #[error(transparent)]
-    ChannelReceive(#[from] crossbeam_channel::RecvError),
+    ChannelReceive(#[from] flume::RecvError),
+
     #[error(transparent)]
     DeflateCompress(#[from] flate2::CompressError),
+
     #[error(transparent)]
     Io(#[from] io::Error),
+
+    #[error("Invalid number of threads ({0}) selected.")]
+    NumThreads(usize),
     // #[error(transparent)]
     // ThreadPool(#[from] rayon::ThreadPoolBuildError),
     #[error("Unknown")]
@@ -151,7 +161,7 @@ pub trait FormatSpec: Clone + Copy + Debug + Send + Sync + 'static {
     fn header(&self, compression_leval: Compression) -> Vec<u8>;
 
     /// Generate a genric footer for the format.
-    fn footer(&self, check: Self::C) -> Vec<u8>;
+    fn footer(&self, check: &Self::C) -> Vec<u8>;
 
     /// Convert a list of [`Pair`] into bytes.
     fn to_bytes(&self, pairs: &[Pair]) -> Vec<u8> {
