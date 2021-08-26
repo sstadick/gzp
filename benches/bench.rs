@@ -1,14 +1,13 @@
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use flate2::write::GzEncoder;
 use tempfile::tempdir;
 
 use gzp::deflate::Gzip;
 use gzp::parz::{Compression, ParZ};
 use gzp::snap::Snap;
-use gzp::z::Z;
 
 fn compress_with_gzip(num_threads: usize, buffer_size: usize, compression_level: u32) {
     let dir = tempdir().unwrap();
@@ -61,9 +60,7 @@ fn compress_with_gzip_only(buffer_size: usize, compression_level: u32) {
     let dir = tempdir().unwrap();
     let output_file = File::create(dir.path().join("shakespeare_flate2.txt.gz")).unwrap();
     let mut writer = GzEncoder::new(output_file, Compression::new(compression_level));
-    // let mut writer = Z::<Gzip, _>::builder(output_file).compression_level(Compression::new(compression_level)).build().unwrap();
     let mut reader = BufReader::new(File::open("./bench-data/shakespeare.txt").unwrap());
-
 
     let mut buffer = Vec::with_capacity(buffer_size);
     loop {
@@ -82,9 +79,9 @@ fn compress_with_gzip_only(buffer_size: usize, compression_level: u32) {
 fn compress_with_snap_only(buffer_size: usize) {
     let dir = tempdir().unwrap();
     let output_file = File::create(dir.path().join("shakespeare_snap.txt.gz")).unwrap();
-    let mut writer = Z::<Snap, _>::builder(output_file).build().unwrap();
-    let mut reader = BufReader::new(File::open("./bench-data/shakespeare.txt").unwrap());
 
+    let mut reader = BufReader::new(File::open("./bench-data/shakespeare.txt").unwrap());
+    let mut writer = snap::write::FrameEncoder::new(output_file);
     let mut buffer = Vec::with_capacity(buffer_size);
     loop {
         let mut limit = (&mut reader).take(buffer_size as u64);
@@ -124,9 +121,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| compress_with_gzip_only(buffersize, compression_level))
     });
 
-    group.bench_function("Snap/0", |b| {
-        b.iter(|| compress_with_snap_only(buffersize))
-    });
+    group.bench_function("Snap/0", |b| b.iter(|| compress_with_snap_only(buffersize)));
     group.finish();
 }
 

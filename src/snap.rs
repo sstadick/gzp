@@ -138,22 +138,14 @@ mod test {
 
 
             // Compress input to output
-            if num_threads > 0 {
-                let mut par_gz: ParZ<Snap> = ParZ::builder(out_writer)
-                    .buffer_size(buf_size).unwrap()
-                    .num_threads(num_threads).unwrap()
-                    .build();
-                for chunk in input.chunks(write_size) {
-                    par_gz.write_all(chunk).unwrap();
-                }
-                par_gz.finish().unwrap();
-            } else {
-                let mut z = Z::<Snap, _>::builder(out_writer).buffer_size(buf_size).unwrap().build().unwrap();
-                for chunk in input.chunks(write_size) {
-                    z.write_all(chunk).unwrap();
-                }
-                z.finish().unwrap();
+            let mut par_gz: ParZ<Snap> = ParZ::builder(out_writer)
+                .buffer_size(buf_size).unwrap()
+                .num_threads(num_threads).unwrap()
+                .build();
+            for chunk in input.chunks(write_size) {
+                par_gz.write_all(chunk).unwrap();
             }
+            par_gz.finish().unwrap();
 
             // Read output back in
             let mut reader = BufReader::new(File::open(output_file).unwrap());

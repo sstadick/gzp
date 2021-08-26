@@ -33,7 +33,6 @@
 //! ```
 use std::fmt::Debug;
 use std::io;
-use std::process::exit;
 
 use bytes::Bytes;
 use flume::{unbounded, Receiver, Sender};
@@ -48,7 +47,6 @@ pub mod deflate;
 pub mod parz;
 #[cfg(feature = "snappy")]
 pub mod snap;
-pub mod z;
 
 /// 128 KB default buffer size, same as pigz.
 pub const BUFSIZE: usize = 64 * (1 << 10) * 2;
@@ -179,10 +177,6 @@ pub trait FormatSpec: Clone + Copy + Debug + Send + Sync + 'static {
                 loop {
                     n -= 8;
                     buffer.push((value >> n) as u8);
-                    // buffer.push(value.checked_shr(n as u32).unwrap_or(0) as u8);
-                    if n < 0 {
-                        exit(1)
-                    }
                     if n == 0 {
                         break;
                     }
