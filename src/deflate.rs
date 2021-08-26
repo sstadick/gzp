@@ -342,10 +342,6 @@ mod test {
         ];
 
         // Compress input to output
-        // let mut par_gz = ZBuilder::<Gzip, _>::new(out_writer)
-        //     .buffer_size(DICT_SIZE)
-        //     .unwrap()
-        //     .build();
         let mut par_gz: ParZ<Gzip> = ParZ::builder(out_writer)
             .buffer_size(DICT_SIZE)
             .unwrap()

@@ -151,6 +151,7 @@ where
 
     /// Launch threads to compress chunks and coordinate sending compressed results
     /// to the writer.
+    #[allow(clippy::needless_collect)]
     fn run<W>(
         rx: &Receiver<Message<F::C>>,
         rx_writer: &Receiver<Receiver<CompressResult<F::C>>>,
@@ -184,9 +185,11 @@ where
                     Ok(())
                 })
             })
+            // This collect is needed to force the evaluation, otherwise this thread will block on writes waiting
+            // for data to show up that will never come since the iterator is lazy.
             .collect();
 
-        // writer
+        // Writer
         writer.write_all(&format.header(compression_level))?;
         let mut running_check = F::create_check();
         while let Ok(chunk_chan) = rx_writer.recv() {
