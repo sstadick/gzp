@@ -100,7 +100,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let buffersize = 64 * (1 << 10);
     let compression_level = 3;
     let mut group = c.benchmark_group("Compression");
-    for num_cpus in [1, 2, 3, 4, 8, 15, 16, 30] {
+    for num_cpus in [1, 2, 3, 4, 8, 16, 32] {
         group.bench_with_input(
             BenchmarkId::new("Gzip", num_cpus),
             &num_cpus,
