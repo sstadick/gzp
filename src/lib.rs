@@ -19,7 +19,7 @@
 //! # Examples
 //!
 //! ```
-//! # #[cfg(feature = "deflate_default")] {
+//! # #[cfg(feature = "deflate")] {
 //! use std::{env, fs::File, io::Write};
 //!
 //! use gzp::{deflate::Gzip, parz::ParZ};
@@ -77,8 +77,7 @@ pub enum GzpError {
 
     #[error("Invalid number of threads ({0}) selected.")]
     NumThreads(usize),
-    // #[error(transparent)]
-    // ThreadPool(#[from] rayon::ThreadPoolBuildError),
+
     #[error("Unknown")]
     Unknown,
 }
