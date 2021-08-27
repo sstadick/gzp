@@ -22,7 +22,7 @@
 //! # #[cfg(feature = "deflate")] {
 //! use std::{env, fs::File, io::Write};
 //!
-//! use gzp::{deflate::Gzip, parz::ParZ};
+//! use gzp::{deflate::Gzip, parz::ParZ, ZWriter};
 //!
 //! let mut writer = vec![];
 //! let mut parz: ParZ<Gzip> = ParZ::builder(writer).build();
@@ -32,7 +32,7 @@
 //! # }
 //! ```
 use std::fmt::Debug;
-use std::io;
+use std::io::{self, Write};
 
 use bytes::Bytes;
 use flume::{unbounded, Receiver, Sender};
@@ -47,6 +47,7 @@ pub mod deflate;
 pub mod parz;
 #[cfg(feature = "snappy")]
 pub mod snap;
+pub mod z;
 
 /// 128 KB default buffer size, same as pigz.
 pub const BUFSIZE: usize = 64 * (1 << 10) * 2;
@@ -80,6 +81,20 @@ pub enum GzpError {
 
     #[error("Unknown")]
     Unknown,
+}
+
+/// Trait that unifies sync and async writer
+pub trait ZWriter: Write {
+    /// Cleans up resources, writes footers
+    fn finish(&mut self) -> Result<(), GzpError>;
+}
+
+/// Create a synchronous writer wrapping the input `W` type.
+pub trait SyncWriter<W: Write> {
+    // type InputWriter: Write;
+    type OutputWriter: Write;
+
+    fn sync_writer(writer: W, compression_level: Compression) -> Self::OutputWriter;
 }
 
 /// A message sent from the [`ParZ`] writer to the compressor.

@@ -4,6 +4,7 @@ mod example {
 
     use gzp::deflate::Gzip;
     use gzp::parz::ParZ;
+    use gzp::ZWriter;
 
     pub fn main() {
         let file = env::args().skip(1).next().unwrap();

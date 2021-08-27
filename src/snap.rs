@@ -12,7 +12,7 @@
 //! # #[cfg(feature = "snappy")] {
 //! use std::{env, fs::File, io::Write};
 //!
-//! use gzp::{snap::Snap, parz::ParZ};
+//! use gzp::{snap::Snap, parz::ParZ, ZWriter};
 //!
 //! let mut writer = vec![];
 //! let mut parz: ParZ<Snap> = ParZ::builder(writer).build();
@@ -21,14 +21,15 @@
 //! parz.finish().unwrap();
 //! # }
 //! ```
-use std::io::Read;
+use std::io::{Read, Write};
 
 use bytes::Bytes;
 use snap::read::FrameEncoder;
 
 use crate::check::PassThroughCheck;
 use crate::parz::Compression;
-use crate::{FormatSpec, GzpError};
+use crate::z::Z;
+use crate::{FormatSpec, GzpError, SyncWriter, ZWriter};
 
 /// Produce snappy deflate stream
 #[derive(Copy, Clone, Debug)]
@@ -71,6 +72,26 @@ impl FormatSpec for Snap {
     }
 }
 
+impl<W> SyncWriter<W> for Snap
+where
+    W: Write,
+{
+    type OutputWriter = snap::write::FrameEncoder<W>;
+
+    /// Compression level is ignored for snap
+    fn sync_writer(writer: W, _compression_level: Compression) -> snap::write::FrameEncoder<W> {
+        snap::write::FrameEncoder::new(writer)
+    }
+}
+
+impl<W: Write> ZWriter for Z<snap::write::FrameEncoder<W>> {
+    /// This is a no-op for snappy and does nothing
+    fn finish(&mut self) -> Result<(), GzpError> {
+        drop(self.inner.take());
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::io::{Read, Write};
@@ -84,7 +105,8 @@ mod test {
     use tempfile::tempdir;
 
     use crate::parz::ParZ;
-    use crate::{BUFSIZE, DICT_SIZE};
+    use crate::z::ZBuilder;
+    use crate::{ZWriter, BUFSIZE, DICT_SIZE};
 
     use super::*;
 
@@ -127,7 +149,7 @@ mod test {
         fn test_all_snap(
             input in prop::collection::vec(0..u8::MAX, 1..DICT_SIZE * 10),
             buf_size in DICT_SIZE..BUFSIZE,
-            num_threads in 1..num_cpus::get(),
+            num_threads in 0..num_cpus::get(),
             write_size in 1..10_000usize,
         ) {
             let dir = tempdir().unwrap();
@@ -138,10 +160,15 @@ mod test {
 
 
             // Compress input to output
-            let mut par_gz: ParZ<Snap> = ParZ::builder(out_writer)
-                .buffer_size(buf_size).unwrap()
-                .num_threads(num_threads).unwrap()
-                .build();
+            let mut par_gz: Box<dyn ZWriter> = if num_threads > 0 {
+                Box::new(ParZ::<Snap>::builder(out_writer)
+                    .buffer_size(buf_size).unwrap()
+                    .num_threads(num_threads).unwrap()
+                    .build())
+            } else {
+                Box::new(ZBuilder::<Snap, _>::new().from_writer(out_writer))
+            };
+
             for chunk in input.chunks(write_size) {
                 par_gz.write_all(chunk).unwrap();
             }

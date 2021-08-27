@@ -6,7 +6,7 @@
 //! # #[cfg(feature = "deflate")] {
 //! use std::{env, fs::File, io::Write};
 //!
-//! use gzp::{parz::ParZ, deflate::Gzip};
+//! use gzp::{parz::ParZ, deflate::Gzip, ZWriter};
 //!
 //! let mut writer = vec![];
 //! let mut parz: ParZ<Gzip> = ParZ::builder(writer).build();
@@ -24,7 +24,7 @@ use bytes::{Bytes, BytesMut};
 pub use flate2::Compression;
 use flume::{bounded, Receiver, Sender};
 
-use crate::{Check, CompressResult, FormatSpec, GzpError, Message, BUFSIZE, DICT_SIZE};
+use crate::{Check, CompressResult, FormatSpec, GzpError, Message, ZWriter, BUFSIZE, DICT_SIZE};
 
 /// The [`ParZ`] builder.
 #[derive(Debug)]
@@ -112,9 +112,9 @@ where
             )
         });
         ParZ {
-            handle,
-            tx_compressor,
-            tx_writer,
+            handle: Some(handle),
+            tx_compressor: Some(tx_compressor),
+            tx_writer: Some(tx_writer),
             dictionary: None,
             buffer: BytesMut::with_capacity(buffer_size),
             buffer_size,
@@ -128,9 +128,9 @@ pub struct ParZ<F>
 where
     F: FormatSpec,
 {
-    handle: std::thread::JoinHandle<Result<(), GzpError>>,
-    tx_compressor: Sender<Message<F::C>>,
-    tx_writer: Sender<Receiver<CompressResult<F::C>>>,
+    handle: Option<std::thread::JoinHandle<Result<(), GzpError>>>,
+    tx_compressor: Option<Sender<Message<F::C>>>,
+    tx_writer: Option<Sender<Receiver<CompressResult<F::C>>>>,
     buffer: BytesMut,
     dictionary: Option<Bytes>,
     buffer_size: usize,
@@ -215,6 +215,9 @@ where
     ///
     /// If this is the last buffer to be sent, set `is_last` to false to trigger compression
     /// stream completion.
+    ///
+    /// # Panics
+    /// - If called after `finish`
     fn flush_last(&mut self, is_last: bool) -> std::io::Result<()> {
         let (mut m, r) = Message::new_parts(
             self.buffer.split().freeze(),
@@ -227,28 +230,52 @@ where
         }
 
         self.tx_writer
+            .as_ref()
+            .unwrap()
             .send(r)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         self.tx_compressor
+            .as_ref()
+            .unwrap()
             .send(m)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         Ok(())
     }
+}
 
+impl<F> ZWriter for ParZ<F>
+where
+    F: FormatSpec,
+{
     /// Flush the buffers and wait on all threads to finish working.
     ///
     /// This *MUST* be called before the [`ParZ`] object goes out of scope.
     ///
     /// # Errors
     /// - [`GzpError`] if there is an issue flushing the last blocks or an issue joining on the writer thread
-    pub fn finish(mut self) -> Result<(), GzpError> {
+    ///
+    /// # Panics
+    /// - If called twice
+    fn finish(&mut self) -> Result<(), GzpError> {
         self.flush_last(true)?;
-        drop(self.tx_compressor);
-        drop(self.tx_writer);
-        match self.handle.join() {
+        drop(self.tx_compressor.take());
+        drop(self.tx_writer.take());
+        match self.handle.take().unwrap().join() {
             Ok(result) => result,
             Err(e) => std::panic::resume_unwind(e),
         }
+    }
+}
+
+impl<F> Drop for ParZ<F>
+where
+    F: FormatSpec,
+{
+    fn drop(&mut self) {
+        if self.tx_compressor.is_some() && self.tx_writer.is_some() && self.handle.is_some() {
+            self.finish().unwrap();
+        }
+        // Resources already cleaned up if channels and handle are None
     }
 }
 
@@ -257,6 +284,9 @@ where
     F: FormatSpec,
 {
     /// Write a buffer into this writer, returning how many bytes were written.
+    ///
+    /// # Panics
+    /// - If called after calling `finish`
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.buffer.extend_from_slice(buf);
         if self.buffer.len() > self.buffer_size {
@@ -269,9 +299,13 @@ where
                 None
             };
             self.tx_writer
+                .as_ref()
+                .unwrap()
                 .send(r)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
             self.tx_compressor
+                .as_ref()
+                .unwrap()
                 .send(m)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
             self.buffer

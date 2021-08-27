@@ -5,6 +5,7 @@ mod example {
     use gzp::{
         deflate::Gzip,
         parz::{Compression, ParZ},
+        ZWriter,
     };
 
     pub fn main() {
