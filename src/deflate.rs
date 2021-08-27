@@ -21,6 +21,7 @@
 //! parz.finish().unwrap();
 //! # }
 //! ```
+
 use bytes::Bytes;
 use flate2::{Compress, FlushCompress};
 
@@ -52,7 +53,7 @@ impl FormatSpec for Gzip {
         &self,
         input: &[u8],
         compression_level: Compression,
-        dict: Option<Bytes>,
+        dict: Option<&Bytes>,
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError> {
         // The plus 16 allows odd small sized blocks to extend up to a byte boundary and end stream
@@ -97,7 +98,7 @@ impl FormatSpec for Gzip {
     }
 
     #[rustfmt::skip]
-    fn footer(&self, check: Self::C) -> Vec<u8> {
+    fn footer(&self, check: &Self::C) -> Vec<u8> {
         let footer = vec![
             Pair { num_bytes: 4, value: check.sum() as usize },
             Pair { num_bytes: 4, value: check.amount() as usize },
@@ -129,7 +130,7 @@ impl FormatSpec for Zlib {
         &self,
         input: &[u8],
         compression_level: Compression,
-        dict: Option<Bytes>,
+        dict: Option<&Bytes>,
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError> {
         // The plus 16 allows odd small sized blocks to extend up to a byte boundary and end stream
@@ -175,7 +176,7 @@ impl FormatSpec for Zlib {
         self.to_bytes(&header)
     }
 
-    fn footer(&self, check: Self::C) -> Vec<u8> {
+    fn footer(&self, check: &Self::C) -> Vec<u8> {
         let footer = vec![Pair {
             num_bytes: -4,
             value: check.sum() as usize,
@@ -184,7 +185,7 @@ impl FormatSpec for Zlib {
     }
 }
 
-/// Produce a contiguous raw deflat
+/// Produce a contiguous raw deflate
 #[derive(Copy, Clone, Debug)]
 pub struct RawDeflate {}
 
@@ -206,7 +207,7 @@ impl FormatSpec for RawDeflate {
         &self,
         input: &[u8],
         compression_level: Compression,
-        dict: Option<Bytes>,
+        dict: Option<&Bytes>,
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError> {
         // The plus 8 allows odd small sized blocks to extend up to a byte boundary
@@ -225,7 +226,7 @@ impl FormatSpec for RawDeflate {
         vec![]
     }
 
-    fn footer(&self, check: Self::C) -> Vec<u8> {
+    fn footer(&self, check: &Self::C) -> Vec<u8> {
         vec![]
     }
 }
@@ -343,8 +344,7 @@ mod test {
         // Compress input to output
         let mut par_gz: ParZ<Gzip> = ParZ::builder(out_writer)
             .buffer_size(DICT_SIZE)
-            // .buffer_size(205)
-            // .compression_level(Compression::new(2))
+            .unwrap()
             .build();
         par_gz.write_all(&input[..]).unwrap();
         par_gz.finish().unwrap();
@@ -369,7 +369,7 @@ mod test {
         fn test_all_gzip(
             input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)),
             buf_size in DICT_SIZE..BUFSIZE,
-            num_threads in 4..num_cpus::get(),
+            num_threads in 1..num_cpus::get(),
             write_size in 1..10_000usize,
         ) {
             let dir = tempdir().unwrap();
@@ -381,8 +381,8 @@ mod test {
 
             // Compress input to output
             let mut par_gz: ParZ<Gzip> = ParZ::builder(out_writer)
-                .buffer_size(buf_size)
-                .num_threads(num_threads)
+                .buffer_size(buf_size).unwrap()
+                .num_threads(num_threads).unwrap()
                 .build();
             for chunk in input.chunks(write_size) {
                 par_gz.write_all(chunk).unwrap();
@@ -411,7 +411,7 @@ mod test {
         fn test_all_zlib(
             input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)),
             buf_size in DICT_SIZE..BUFSIZE,
-            num_threads in 4..num_cpus::get(),
+            num_threads in 1..num_cpus::get(),
             write_size in 1..10_000usize,
         ) {
             let dir = tempdir().unwrap();
@@ -423,13 +423,14 @@ mod test {
 
             // Compress input to output
             let mut par_gz: ParZ<Zlib> = ParZ::builder(out_writer)
-                .buffer_size(buf_size)
-                .num_threads(num_threads)
+                .buffer_size(buf_size).unwrap()
+                .num_threads(num_threads).unwrap()
                 .build();
             for chunk in input.chunks(write_size) {
                 par_gz.write_all(chunk).unwrap();
             }
             par_gz.finish().unwrap();
+
 
             // Read output back in
             let mut reader = BufReader::new(File::open(output_file).unwrap());

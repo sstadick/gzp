@@ -33,7 +33,6 @@
 //! ```
 use std::fmt::Debug;
 use std::io;
-use std::process::exit;
 
 use bytes::Bytes;
 use flume::{unbounded, Receiver, Sender};
@@ -61,16 +60,24 @@ pub type CompressResult<C> = Result<(C, Vec<u8>), GzpError>;
 
 #[derive(Error, Debug)]
 pub enum GzpError {
+    #[error("Invalid buffer size ({0}), must be >= {1}")]
+    BufferSize(usize, usize),
+
     #[error("Failed to send over channel.")]
     ChannelSend,
+
     #[error(transparent)]
     ChannelReceive(#[from] flume::RecvError),
+
     #[error(transparent)]
     DeflateCompress(#[from] flate2::CompressError),
+
     #[error(transparent)]
     Io(#[from] io::Error),
-    #[error(transparent)]
-    ThreadPool(#[from] rayon::ThreadPoolBuildError),
+
+    #[error("Invalid number of threads ({0}) selected.")]
+    NumThreads(usize),
+
     #[error("Unknown")]
     Unknown,
 }
@@ -143,7 +150,7 @@ pub trait FormatSpec: Clone + Copy + Debug + Send + Sync + 'static {
         &self,
         input: &[u8],
         compression_level: Compression,
-        dict: Option<Bytes>,
+        dict: Option<&Bytes>,
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError>;
 
@@ -151,7 +158,7 @@ pub trait FormatSpec: Clone + Copy + Debug + Send + Sync + 'static {
     fn header(&self, compression_leval: Compression) -> Vec<u8>;
 
     /// Generate a genric footer for the format.
-    fn footer(&self, check: Self::C) -> Vec<u8>;
+    fn footer(&self, check: &Self::C) -> Vec<u8>;
 
     /// Convert a list of [`Pair`] into bytes.
     fn to_bytes(&self, pairs: &[Pair]) -> Vec<u8> {
@@ -169,10 +176,6 @@ pub trait FormatSpec: Clone + Copy + Debug + Send + Sync + 'static {
                 loop {
                     n -= 8;
                     buffer.push((value >> n) as u8);
-                    // buffer.push(value.checked_shr(n as u32).unwrap_or(0) as u8);
-                    if n < 0 {
-                        exit(1)
-                    }
                     if n == 0 {
                         break;
                     }

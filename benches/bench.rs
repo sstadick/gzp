@@ -14,6 +14,7 @@ fn compress_with_gzip(num_threads: usize, buffer_size: usize, compression_level:
     let output_file = File::create(dir.path().join("shakespeare_gzip.txt.gz")).unwrap();
     let mut writer: ParZ<Gzip> = ParZ::builder(output_file)
         .num_threads(num_threads)
+        .unwrap()
         .compression_level(Compression::new(compression_level))
         .build();
     let mut reader = BufReader::new(File::open("./bench-data/shakespeare.txt").unwrap());
@@ -35,7 +36,10 @@ fn compress_with_gzip(num_threads: usize, buffer_size: usize, compression_level:
 fn compress_with_snap(num_threads: usize, buffer_size: usize) {
     let dir = tempdir().unwrap();
     let output_file = File::create(dir.path().join("shakespeare_gzip.txt.gz")).unwrap();
-    let mut writer: ParZ<Snap> = ParZ::builder(output_file).num_threads(num_threads).build();
+    let mut writer: ParZ<Snap> = ParZ::builder(output_file)
+        .num_threads(num_threads)
+        .unwrap()
+        .build();
     let mut reader = BufReader::new(File::open("./bench-data/shakespeare.txt").unwrap());
 
     let mut buffer = Vec::with_capacity(buffer_size);
@@ -75,9 +79,9 @@ fn compress_with_gzip_only(buffer_size: usize, compression_level: u32) {
 fn compress_with_snap_only(buffer_size: usize) {
     let dir = tempdir().unwrap();
     let output_file = File::create(dir.path().join("shakespeare_snap.txt.gz")).unwrap();
-    let mut writer = snap::write::FrameEncoder::new(output_file);
-    let mut reader = BufReader::new(File::open("./bench-data/shakespeare.txt").unwrap());
 
+    let mut reader = BufReader::new(File::open("./bench-data/shakespeare.txt").unwrap());
+    let mut writer = snap::write::FrameEncoder::new(output_file);
     let mut buffer = Vec::with_capacity(buffer_size);
     loop {
         let mut limit = (&mut reader).take(buffer_size as u64);
@@ -96,7 +100,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let buffersize = 64 * (1 << 10);
     let compression_level = 3;
     let mut group = c.benchmark_group("Compression");
-    for num_cpus in [2, 4, 8, 16, 30] {
+    for num_cpus in [1, 2, 3, 4, 8, 16, 32] {
         group.bench_with_input(
             BenchmarkId::new("Gzip", num_cpus),
             &num_cpus,
@@ -113,13 +117,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         );
     }
 
-    group.bench_function("Gzip Only", |b| {
+    group.bench_function("Gzip/0", |b| {
         b.iter(|| compress_with_gzip_only(buffersize, compression_level))
     });
 
-    group.bench_function("Snap Only", |b| {
-        b.iter(|| compress_with_snap_only(buffersize))
-    });
+    group.bench_function("Snap/0", |b| b.iter(|| compress_with_snap_only(buffersize)));
     group.finish();
 }
 

@@ -23,7 +23,7 @@ default = ["deflate_default"]
 snappy_default = ["snap", "deflate_rust"] # needs flate2 for compression type
 deflate_default = ["deflate_zlib_ng"]
 deflate_rust = ["deflate", "flate2/rust_backend"]
-deflate_zlib = ["deflate", "flate2/zlib", "any_zlib", "libz-sys"]
+deflate_zlib = ["deflate", "flate2/zlib", "any_zlib", "libz-sys", "libz-sys/libc"]
 deflate_zlib_ng = ["deflate", "flate2/zlib-ng-compat", "any_zlib", "libz-sys"]
 deflate_cloudflare_zlib = ["deflate", "flate2/cloudflare_zlib", "any_zlib", "libz-sys"]
 
@@ -34,12 +34,11 @@ any_zlib = ["flate2/any_zlib"]
 
 [dependencies]
 bytes = "1.0.1"
-flate2 = { version = "~1", default-features = false, optional = true }
 num_cpus = "1.13.0"
 thiserror = "1.0.26"
+flume = { version = "0.10.9" }
+flate2 = { version = "~1", default-features = false, optional = true }
 snap = { version = "~1", optional = true }
-flume = { version = "0.10.8", features = ["async"] }
-rayon = "1.5.1"
 libz-sys = { version = "1.1.3", default-features = false, optional = true }
 
 [dev-dependencies]
