@@ -119,6 +119,15 @@ where
     }
 }
 
+impl<F> Default for ParZBuilder<F>
+where
+    F: FormatSpec,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[allow(unused)]
 pub struct ParZ<F>
 where
