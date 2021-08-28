@@ -1,3 +1,7 @@
+# v0.7.2
+
+- Fix snap feature flags
+
 # v0.7.1
 
 - Handle errors coming from internal writer transparently so that the correct error type is returned to the caller.

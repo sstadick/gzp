@@ -20,7 +20,7 @@ bench = false
 [features]
 # Feature Sets
 default = ["deflate_default"]
-snappy_default = ["snap", "deflate_rust"] # needs flate2 for compression type
+snappy_default = ["snappy", "snap", "deflate_rust"] # needs flate2 for compression type
 deflate_default = ["deflate_zlib_ng"]
 deflate_rust = ["deflate", "flate2/rust_backend"]
 deflate_zlib = ["deflate", "flate2/zlib", "any_zlib", "libz-sys", "libz-sys/libc"]
