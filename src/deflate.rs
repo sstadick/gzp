@@ -12,10 +12,10 @@
 //! # #[cfg(feature = "any_zlib")] {
 //! use std::{env, fs::File, io::Write};
 //!
-//! use gzp::{deflate::Zlib, parz::ParZ, ZWriter};
+//! use gzp::{deflate::Zlib, parz::{ParZ, ParZBuilder}, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParZ<Zlib> = ParZ::builder(writer).build();
+//! let mut parz: ParZ<Zlib> = ParZBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
@@ -32,7 +32,7 @@ use flate2::{Compress, FlushCompress};
 use crate::check::Adler32;
 use crate::check::{Check, Crc32, PassThroughCheck};
 use crate::parz::Compression;
-use crate::z::Z;
+use crate::syncz::SyncZ;
 use crate::{FormatSpec, GzpError, Pair, SyncWriter, ZWriter};
 
 /// Gzip deflate stream with gzip header and footer.
@@ -122,7 +122,7 @@ where
     }
 }
 
-impl<W: Write> ZWriter for Z<GzEncoder<W>> {
+impl<W: Write> ZWriter for SyncZ<GzEncoder<W>> {
     fn finish(&mut self) -> Result<(), GzpError> {
         self.inner.take().unwrap().finish()?;
         Ok(())
@@ -220,7 +220,7 @@ where
 }
 
 #[cfg(feature = "any_zlib")]
-impl<W: Write> ZWriter for Z<ZlibEncoder<W>> {
+impl<W: Write> ZWriter for SyncZ<ZlibEncoder<W>> {
     fn finish(&mut self) -> Result<(), GzpError> {
         self.inner.take().unwrap().finish()?;
         Ok(())
@@ -284,7 +284,7 @@ where
     }
 }
 
-impl<W: Write> ZWriter for Z<DeflateEncoder<W>> {
+impl<W: Write> ZWriter for SyncZ<DeflateEncoder<W>> {
     fn finish(&mut self) -> Result<(), GzpError> {
         self.inner.take().unwrap().finish()?;
         Ok(())
@@ -305,9 +305,9 @@ mod test {
     use proptest::prelude::*;
     use tempfile::tempdir;
 
-    use crate::parz::ParZ;
-    use crate::z::ZBuilder;
-    use crate::{ZWriter, BUFSIZE, DICT_SIZE};
+    use crate::parz::{ParZ, ParZBuilder};
+    use crate::syncz::SyncZBuilder;
+    use crate::{ZBuilder, ZWriter, BUFSIZE, DICT_SIZE};
 
     use super::*;
 
@@ -326,7 +326,7 @@ mod test {
         ";
 
         // Compress input to output
-        let mut par_gz: ParZ<Gzip> = ParZ::builder(out_writer).build();
+        let mut par_gz: ParZ<Gzip> = ParZBuilder::new().from_writer(out_writer);
         par_gz.write_all(input).unwrap();
         par_gz.finish().unwrap();
 
@@ -359,7 +359,7 @@ mod test {
         ";
 
         // Compress input to output
-        let mut z = ZBuilder::<Gzip, _>::new().from_writer(out_writer);
+        let mut z = SyncZBuilder::<Gzip, _>::new().from_writer(out_writer);
         z.write_all(input).unwrap();
         z.finish().unwrap();
 
@@ -393,7 +393,7 @@ mod test {
         ";
 
         // Compress input to output
-        let mut par_gz: ParZ<Zlib> = ParZ::builder(out_writer).build();
+        let mut par_gz: ParZ<Zlib> = ParZBuilder::new().from_writer(out_writer);
         par_gz.write_all(input).unwrap();
         par_gz.finish().unwrap();
 
@@ -427,7 +427,7 @@ mod test {
         ";
 
         // Compress input to output
-        let mut z = ZBuilder::<Zlib, _>::new().from_writer(out_writer);
+        let mut z = SyncZBuilder::<Zlib, _>::new().from_writer(out_writer);
         z.write_all(input).unwrap();
         z.finish().unwrap();
 
@@ -470,10 +470,10 @@ mod test {
         ];
 
         // Compress input to output
-        let mut par_gz: ParZ<Gzip> = ParZ::builder(out_writer)
+        let mut par_gz: ParZ<Gzip> = ParZBuilder::new()
             .buffer_size(DICT_SIZE)
             .unwrap()
-            .build();
+            .from_writer(out_writer);
         par_gz.write_all(&input[..]).unwrap();
         par_gz.finish().unwrap();
 
@@ -509,13 +509,50 @@ mod test {
 
             // Compress input to output
             let mut par_gz: Box<dyn ZWriter> = if num_threads > 0 {
-                Box::new(ParZ::<Gzip>::builder(out_writer)
+                Box::new(ParZBuilder::<Gzip>::new()
                     .buffer_size(buf_size).unwrap()
                     .num_threads(num_threads).unwrap()
-                    .build())
+                    .from_writer(out_writer))
             } else {
-                Box::new(ZBuilder::<Gzip, _>::new().from_writer(out_writer))
+                Box::new(SyncZBuilder::<Gzip, _>::new().from_writer(out_writer))
             };
+            for chunk in input.chunks(write_size) {
+                par_gz.write_all(chunk).unwrap();
+            }
+            par_gz.finish().unwrap();
+
+            dbg!(&output_file);
+            // std::process::exit(1);
+            // Read output back in
+            let mut reader = BufReader::new(File::open(output_file).unwrap());
+            let mut result = vec![];
+            reader.read_to_end(&mut result).unwrap();
+
+            // Decompress it
+            let mut gz = GzDecoder::new(&result[..]);
+            let mut bytes = vec![];
+            gz.read_to_end(&mut bytes).unwrap();
+
+            // Assert decompressed output is equal to input
+            assert_eq!(input.to_vec(), bytes);
+        }
+
+        #[test]
+        #[ignore]
+        fn test_all_gzip_zbuilder(
+            input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)),
+            num_threads in 0..num_cpus::get(),
+            write_size in 1..10_000usize,
+        ) {
+            let dir = tempdir().unwrap();
+
+            // Create output file
+            let output_file = dir.path().join("output.txt");
+            let out_writer = BufWriter::new(File::create(&output_file).unwrap());
+
+
+            // Compress input to output
+            let mut par_gz = ZBuilder::<Gzip, _>::new().num_threads(num_threads).from_writer(out_writer);
             for chunk in input.chunks(write_size) {
                 par_gz.write_all(chunk).unwrap();
             }
@@ -555,12 +592,12 @@ mod test {
 
             // Compress input to output
             let mut par_gz: Box<dyn ZWriter> = if num_threads > 0 {
-                Box::new(ParZ::<Zlib>::builder(out_writer)
+                Box::new(ParZBuilder::<Zlib>::new()
                     .buffer_size(buf_size).unwrap()
                     .num_threads(num_threads).unwrap()
-                    .build())
+                    .from_writer(out_writer))
             } else {
-                Box::new(ZBuilder::<Zlib, _>::new().from_writer(out_writer))
+                Box::new(SyncZBuilder::<Zlib, _>::new().from_writer(out_writer))
             };
             for chunk in input.chunks(write_size) {
                 par_gz.write_all(chunk).unwrap();

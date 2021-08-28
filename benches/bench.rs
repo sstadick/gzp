@@ -8,15 +8,29 @@ use tempfile::tempdir;
 use gzp::deflate::Gzip;
 use gzp::parz::{Compression, ParZ};
 use gzp::snap::Snap;
+use gzp::syncz::SyncZBuilder;
+use gzp::ZWriter;
 
 fn compress_with_gzip(num_threads: usize, buffer_size: usize, compression_level: u32) {
     let dir = tempdir().unwrap();
     let output_file = File::create(dir.path().join("shakespeare_gzip.txt.gz")).unwrap();
-    let mut writer: ParZ<Gzip> = ParZ::builder(output_file)
-        .num_threads(num_threads)
-        .unwrap()
-        .compression_level(Compression::new(compression_level))
-        .build();
+
+    let mut writer: Box<dyn ZWriter> = if num_threads > 0 {
+        Box::new(
+            ParZ::<Gzip>::builder(output_file)
+                .num_threads(num_threads)
+                .unwrap()
+                .compression_level(Compression::new(compression_level))
+                .build(),
+        )
+    } else {
+        Box::new(
+            SyncZBuilder::<Gzip, _>::new()
+                .compression_level(Compression::new(compression_level))
+                .from_writer(output_file),
+        )
+    };
+
     let mut reader = BufReader::new(File::open("./bench-data/shakespeare.txt").unwrap());
 
     let mut buffer = Vec::with_capacity(buffer_size);
@@ -36,10 +50,17 @@ fn compress_with_gzip(num_threads: usize, buffer_size: usize, compression_level:
 fn compress_with_snap(num_threads: usize, buffer_size: usize) {
     let dir = tempdir().unwrap();
     let output_file = File::create(dir.path().join("shakespeare_gzip.txt.gz")).unwrap();
-    let mut writer: ParZ<Snap> = ParZ::builder(output_file)
-        .num_threads(num_threads)
-        .unwrap()
-        .build();
+    let mut writer: Box<dyn ZWriter> = if num_threads > 0 {
+        Box::new(
+            ParZ::<Snap>::builder(output_file)
+                .num_threads(num_threads)
+                .unwrap()
+                .build(),
+        )
+    } else {
+        Box::new(SyncZBuilder::<Snap, _>::new().from_writer(output_file))
+    };
+
     let mut reader = BufReader::new(File::open("./bench-data/shakespeare.txt").unwrap());
 
     let mut buffer = Vec::with_capacity(buffer_size);
@@ -100,7 +121,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let buffersize = 64 * (1 << 10);
     let compression_level = 3;
     let mut group = c.benchmark_group("Compression");
-    for num_cpus in [1, 2, 3, 4, 8, 16, 32] {
+    for num_cpus in [0, 1, 2, 3, 4, 8, 16, 32] {
         group.bench_with_input(
             BenchmarkId::new("Gzip", num_cpus),
             &num_cpus,
@@ -117,11 +138,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         );
     }
 
-    group.bench_function("Gzip/0", |b| {
-        b.iter(|| compress_with_gzip_only(buffersize, compression_level))
-    });
-
-    group.bench_function("Snap/0", |b| b.iter(|| compress_with_snap_only(buffersize)));
+    // group.bench_function("Gzip/0", |b| {
+    //     b.iter(|| compress_with_gzip_only(buffersize, compression_level))
+    // });
+    //
+    // group.bench_function("Snap/0", |b| b.iter(|| compress_with_snap_only(buffersize)));
     group.finish();
 }
 

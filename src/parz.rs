@@ -6,10 +6,10 @@
 //! # #[cfg(feature = "deflate")] {
 //! use std::{env, fs::File, io::Write};
 //!
-//! use gzp::{parz::ParZ, deflate::Gzip, ZWriter};
+//! use gzp::{parz::{ParZ, ParZBuilder}, deflate::Gzip, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParZ<Gzip> = ParZ::builder(writer).build();
+//! let mut parz: ParZ<Gzip> = ParZBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
@@ -28,14 +28,12 @@ use crate::{Check, CompressResult, FormatSpec, GzpError, Message, ZWriter, BUFSI
 
 /// The [`ParZ`] builder.
 #[derive(Debug)]
-pub struct ParZBuilder<W, F>
+pub struct ParZBuilder<F>
 where
     F: FormatSpec,
 {
     /// The buffersize accumulate before trying to compress it. Defaults to [`BUFSIZE`].
     buffer_size: usize,
-    /// The underlying writer to write to.
-    writer: W,
     /// The number of threads to use for compression. Defaults to all available threads.
     num_threads: usize,
     /// The compression level of the output, see [`Compression`].
@@ -44,16 +42,14 @@ where
     format: F,
 }
 
-impl<W, F> ParZBuilder<W, F>
+impl<F> ParZBuilder<F>
 where
-    W: Send + Write + 'static,
     F: FormatSpec,
 {
     /// Create a new [`ParZBuilder`] object.
-    pub fn new(writer: W) -> Self {
+    pub fn new() -> Self {
         Self {
             buffer_size: BUFSIZE,
-            writer,
             num_threads: num_cpus::get(),
             compression_level: Compression::new(3),
             format: F::new(),
@@ -95,7 +91,7 @@ where
     }
 
     /// Create a configured [`ParZ`] object.
-    pub fn build(self) -> ParZ<F> {
+    pub fn from_writer<W: Write + Send + 'static>(self, writer: W) -> ParZ<F> {
         let (tx_compressor, rx_compressor) = bounded(self.num_threads * 2);
         let (tx_writer, rx_writer) = bounded(self.num_threads * 2);
         let buffer_size = self.buffer_size;
@@ -105,7 +101,7 @@ where
             ParZ::run(
                 &rx_compressor,
                 &rx_writer,
-                self.writer,
+                writer,
                 self.num_threads,
                 comp_level,
                 format,
@@ -142,11 +138,8 @@ where
     F: FormatSpec,
 {
     /// Create a builder to configure the [`ParZ`] runtime.
-    pub fn builder<W>(writer: W) -> ParZBuilder<W, F>
-    where
-        W: Write + Send + 'static,
-    {
-        ParZBuilder::new(writer)
+    pub fn builder() -> ParZBuilder<F> {
+        ParZBuilder::new()
     }
 
     /// Launch threads to compress chunks and coordinate sending compressed results

@@ -12,10 +12,10 @@
 //! # #[cfg(feature = "snappy")] {
 //! use std::{env, fs::File, io::Write};
 //!
-//! use gzp::{snap::Snap, parz::ParZ, ZWriter};
+//! use gzp::{snap::Snap, parz::{ParZBuilder, ParZ}, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParZ<Snap> = ParZ::builder(writer).build();
+//! let mut parz: ParZ<Snap> = ParZBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
@@ -28,7 +28,7 @@ use snap::read::FrameEncoder;
 
 use crate::check::PassThroughCheck;
 use crate::parz::Compression;
-use crate::z::Z;
+use crate::syncz::SyncZ;
 use crate::{FormatSpec, GzpError, SyncWriter, ZWriter};
 
 /// Produce snappy deflate stream
@@ -84,7 +84,7 @@ where
     }
 }
 
-impl<W: Write> ZWriter for Z<snap::write::FrameEncoder<W>> {
+impl<W: Write> ZWriter for SyncZ<snap::write::FrameEncoder<W>> {
     /// This is a no-op for snappy and does nothing
     fn finish(&mut self) -> Result<(), GzpError> {
         drop(self.inner.take());
@@ -104,9 +104,9 @@ mod test {
     use snap::read::FrameDecoder;
     use tempfile::tempdir;
 
-    use crate::parz::ParZ;
-    use crate::z::ZBuilder;
-    use crate::{ZWriter, BUFSIZE, DICT_SIZE};
+    use crate::parz::{ParZ, ParZBuilder};
+    use crate::syncz::SyncZBuilder;
+    use crate::{ZBuilder, ZWriter, BUFSIZE, DICT_SIZE};
 
     use super::*;
 
@@ -125,7 +125,7 @@ mod test {
         ";
 
         // Compress input to output
-        let mut par_gz: ParZ<Snap> = ParZ::builder(out_writer).build();
+        let mut par_gz: ParZ<Snap> = ParZBuilder::new().from_writer(out_writer);
         par_gz.write_all(input).unwrap();
         par_gz.finish().unwrap();
 
@@ -161,14 +161,49 @@ mod test {
 
             // Compress input to output
             let mut par_gz: Box<dyn ZWriter> = if num_threads > 0 {
-                Box::new(ParZ::<Snap>::builder(out_writer)
+                Box::new(ParZBuilder::<Snap>::new()
                     .buffer_size(buf_size).unwrap()
                     .num_threads(num_threads).unwrap()
-                    .build())
+                    .from_writer(out_writer))
             } else {
-                Box::new(ZBuilder::<Snap, _>::new().from_writer(out_writer))
+                Box::new(SyncZBuilder::<Snap, _>::new().from_writer(out_writer))
             };
 
+            for chunk in input.chunks(write_size) {
+                par_gz.write_all(chunk).unwrap();
+            }
+            par_gz.finish().unwrap();
+
+            // Read output back in
+            let mut reader = BufReader::new(File::open(output_file).unwrap());
+            let mut result = vec![];
+            reader.read_to_end(&mut result).unwrap();
+
+            // Decompress it
+            let mut gz = FrameDecoder::new(&result[..]);
+            let mut bytes = vec![];
+            gz.read_to_end(&mut bytes).unwrap();
+
+            // Assert decompressed output is equal to input
+            assert_eq!(input.to_vec(), bytes);
+        }
+
+        #[test]
+        #[ignore]
+        fn test_all_snap_zbuilder(
+            input in prop::collection::vec(0..u8::MAX, 1..DICT_SIZE * 10),
+            num_threads in 0..num_cpus::get(),
+            write_size in 1..10_000usize,
+        ) {
+            let dir = tempdir().unwrap();
+
+            // Create output file
+            let output_file = dir.path().join("output.txt");
+            let out_writer = BufWriter::new(File::create(&output_file).unwrap());
+
+
+            // Compress input to output
+            let mut par_gz = ZBuilder::<Snap, _>::new().num_threads(num_threads).from_writer(out_writer);
             for chunk in input.chunks(write_size) {
                 par_gz.write_all(chunk).unwrap();
             }

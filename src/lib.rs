@@ -18,14 +18,51 @@
 //!
 //! # Examples
 //!
+//! A typical parallel compression task:
+//!
 //! ```
 //! # #[cfg(feature = "deflate")] {
 //! use std::{env, fs::File, io::Write};
 //!
-//! use gzp::{deflate::Gzip, parz::ParZ, ZWriter};
+//! use gzp::{deflate::Gzip, parz::{ParZ, ParZBuilder}, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParZ<Gzip> = ParZ::builder(writer).build();
+//! let mut parz: ParZ<Gzip> = ParZBuilder::new().from_writer(writer);
+//! parz.write_all(b"This is a first test line\n").unwrap();
+//! parz.write_all(b"This is a second test line\n").unwrap();
+//! parz.finish().unwrap();
+//! # }
+//! ```
+//!
+//! A typical single_threaded task:
+//!
+//! ```
+//! # #[cfg(feature = "deflate")] {
+//! use std::{env, fs::File, io::Write};
+//!
+//! use gzp::{deflate::Gzip, syncz::SyncZBuilder, ZWriter};
+//!
+//! let mut writer = vec![];
+//! let mut parz = SyncZBuilder::<Gzip, _>::new().from_writer(writer);
+//! parz.write_all(b"This is a first test line\n").unwrap();
+//! parz.write_all(b"This is a second test line\n").unwrap();
+//! parz.finish().unwrap();
+//! # }
+//! ```
+//!
+//! If the number of threads might be 0, the following provides a uniform
+//! api:
+//!
+//! ```
+//! # #[cfg(feature = "deflate")] {
+//! use std::{env, fs::File, io::Write};
+//!
+//! use gzp::{deflate::Gzip, ZBuilder, ZWriter};
+//!
+//! let mut writer = vec![];
+//! let mut parz = ZBuilder::<Gzip, _>::new()
+//!     .num_threads(0)
+//!     .from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
@@ -33,13 +70,15 @@
 //! ```
 use std::fmt::Debug;
 use std::io::{self, Write};
+use std::marker::PhantomData;
 
 use bytes::Bytes;
 use flume::{unbounded, Receiver, Sender};
 use thiserror::Error;
 
 use crate::check::Check;
-use crate::parz::Compression;
+use crate::parz::{Compression, ParZBuilder};
+use crate::syncz::{SyncZ, SyncZBuilder};
 
 pub mod check;
 #[cfg(feature = "deflate")]
@@ -47,7 +86,7 @@ pub mod deflate;
 pub mod parz;
 #[cfg(feature = "snappy")]
 pub mod snap;
-pub mod z;
+pub mod syncz;
 
 /// 128 KB default buffer size, same as pigz.
 pub const BUFSIZE: usize = 64 * (1 << 10) * 2;
@@ -95,6 +134,77 @@ pub trait SyncWriter<W: Write> {
     type OutputWriter: Write;
 
     fn sync_writer(writer: W, compression_level: Compression) -> Self::OutputWriter;
+}
+
+/// Unified builder that returns a trait object
+pub struct ZBuilder<F, W>
+where
+    F: FormatSpec + SyncWriter<W>,
+    W: Write + Send + 'static,
+{
+    num_threads: usize,
+    compression_level: Compression,
+    writer: PhantomData<W>,
+    format: PhantomData<F>,
+}
+
+impl<F, W> ZBuilder<F, W>
+where
+    F: FormatSpec + SyncWriter<W>,
+    W: Write + Send + 'static,
+{
+    pub fn new() -> Self {
+        Self {
+            num_threads: num_cpus::get(),
+            compression_level: Compression::new(3),
+            writer: PhantomData,
+            format: PhantomData,
+        }
+    }
+
+    pub fn compression_level(mut self, compression_level: Compression) -> Self {
+        self.compression_level = compression_level;
+        self
+    }
+
+    /// Number of threads to use for compression
+    pub fn num_threads(mut self, num_threads: usize) -> Self {
+        self.num_threads = num_threads;
+        self
+    }
+
+    /// Create a [`ZWriter`] trait object from a writer.
+    #[allow(clippy::missing_panics_doc)]
+    pub fn from_writer(self, writer: W) -> Box<dyn ZWriter>
+    where
+        SyncZ<<F as SyncWriter<W>>::OutputWriter>: ZWriter,
+    {
+        if self.num_threads > 1 {
+            Box::new(
+                ParZBuilder::<F>::new()
+                    .compression_level(self.compression_level)
+                    .num_threads(self.num_threads)
+                    .unwrap()
+                    .from_writer(writer),
+            )
+        } else {
+            Box::new(
+                SyncZBuilder::<F, W>::new()
+                    .compression_level(self.compression_level)
+                    .from_writer(writer),
+            )
+        }
+    }
+}
+
+impl<F, W> Default for ZBuilder<F, W>
+where
+    F: FormatSpec + SyncWriter<W>,
+    W: Write + Send + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// A message sent from the [`ParZ`] writer to the compressor.

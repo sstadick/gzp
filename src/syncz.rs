@@ -1,3 +1,5 @@
+//! Single threaded compression that mimics the [`crate::parz::ParZ`] API and implements
+//! [`crate::ZWriter`].
 use std::{
     io::{self, Write},
     marker::PhantomData,
@@ -7,8 +9,8 @@ use flate2::Compression;
 
 use crate::{FormatSpec, SyncWriter};
 
-/// Builder for [`Z`] synchronous compressor.
-pub struct ZBuilder<F, W>
+/// Builder for [`SyncZ`] synchronous compressor.
+pub struct SyncZBuilder<F, W>
 where
     F: FormatSpec + SyncWriter<W>,
     W: Write,
@@ -18,7 +20,7 @@ where
     phantom: PhantomData<W>,
 }
 
-impl<F, W> ZBuilder<F, W>
+impl<F, W> SyncZBuilder<F, W>
 where
     F: FormatSpec + SyncWriter<W>,
     W: Write,
@@ -33,33 +35,45 @@ where
     }
 
     /// Set the compression level.
-    pub fn compression_leval(mut self, compression_level: Compression) -> Self {
+    pub fn compression_level(mut self, compression_level: Compression) -> Self {
         self.compression_level = compression_level;
         self
     }
 
     /// Create from a writer.
-    pub fn from_writer(self, writer: W) -> Z<F::OutputWriter> {
-        Z {
+    pub fn from_writer(self, writer: W) -> SyncZ<F::OutputWriter> {
+        SyncZ {
             inner: Some(F::sync_writer(writer, self.compression_level)),
         }
     }
 }
 
-pub struct Z<W: Write> {
-    pub(crate) inner: Option<W>,
-}
-
-impl<W> Z<W>
+impl<F, W> Default for SyncZBuilder<F, W>
 where
+    F: FormatSpec + SyncWriter<W>,
     W: Write,
 {
-    pub fn builder<InnerW: Write, F: FormatSpec + SyncWriter<InnerW>>() -> ZBuilder<F, InnerW> {
-        ZBuilder::new()
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-impl<W> Write for Z<W>
+/// The single threaded writer.
+pub struct SyncZ<W: Write> {
+    pub(crate) inner: Option<W>,
+}
+
+impl<W> SyncZ<W>
+where
+    W: Write,
+{
+    /// Create a [`SyncZBuilder`].
+    pub fn builder<InnerW: Write, F: FormatSpec + SyncWriter<InnerW>>() -> SyncZBuilder<F, InnerW> {
+        SyncZBuilder::new()
+    }
+}
+
+impl<W> Write for SyncZ<W>
 where
     W: Write,
 {
