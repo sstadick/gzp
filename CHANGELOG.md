@@ -1,3 +1,9 @@
+# v0.7.1
+
+- Handle errors coming from internal writer transparently so that the correct error type is returned to the caller.
+  - Specifically broken pipes can now be handled the same way they are for anything that implements `Write`
+- Added tests so make sure dropping the writer correctly shuts things down
+
 # v0.7.0
 
 This release adds the `SyncZ` type as well as many API changes.

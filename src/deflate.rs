@@ -345,6 +345,39 @@ mod test {
     }
 
     #[test]
+    fn test_simple_drop() {
+        let dir = tempdir().unwrap();
+
+        // Create output file
+        let output_file = dir.path().join("output.txt");
+        let out_writer = BufWriter::new(File::create(&output_file).unwrap());
+
+        // Define input bytes
+        let input = b"
+        This is a longer test than normal to come up with a bunch of text.
+        We'll read just a few lines at a time.
+        ";
+
+        // Compress input to output
+        let mut par_gz: ParZ<Gzip> = ParZBuilder::new().from_writer(out_writer);
+        par_gz.write_all(input).unwrap();
+        drop(par_gz);
+
+        // Read output back in
+        let mut reader = BufReader::new(File::open(output_file).unwrap());
+        let mut result = vec![];
+        reader.read_to_end(&mut result).unwrap();
+
+        // Decompress it
+        let mut gz = GzDecoder::new(&result[..]);
+        let mut bytes = vec![];
+        gz.read_to_end(&mut bytes).unwrap();
+
+        // Assert decompressed output is equal to input
+        assert_eq!(input.to_vec(), bytes);
+    }
+
+    #[test]
     fn test_simple_sync() {
         let dir = tempdir().unwrap();
 
@@ -362,6 +395,39 @@ mod test {
         let mut z = SyncZBuilder::<Gzip, _>::new().from_writer(out_writer);
         z.write_all(input).unwrap();
         z.finish().unwrap();
+
+        // Read output back in
+        let mut reader = BufReader::new(File::open(output_file).unwrap());
+        let mut result = vec![];
+        reader.read_to_end(&mut result).unwrap();
+
+        // Decompress it
+        let mut gz = GzDecoder::new(&result[..]);
+        let mut bytes = vec![];
+        gz.read_to_end(&mut bytes).unwrap();
+
+        // Assert decompressed output is equal to input
+        assert_eq!(input.to_vec(), bytes);
+    }
+
+    #[test]
+    fn test_simple_sync_drop() {
+        let dir = tempdir().unwrap();
+
+        // Create output file
+        let output_file = dir.path().join("output.txt");
+        let out_writer = BufWriter::new(File::create(&output_file).unwrap());
+
+        // Define input bytes
+        let input = b"
+        This is a longer test than normal to come up with a bunch of text.
+        We'll read just a few lines at a time.
+        ";
+
+        // Compress input to output
+        let mut z = SyncZBuilder::<Gzip, _>::new().from_writer(out_writer);
+        z.write_all(input).unwrap();
+        drop(z);
 
         // Read output back in
         let mut reader = BufReader::new(File::open(output_file).unwrap());

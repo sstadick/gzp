@@ -304,12 +304,36 @@ where
                 .as_ref()
                 .unwrap()
                 .send(r)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                .map_err(|_send_error| {
+                    // If an error occured sending, that means the recievers have dropped an the compressor thread hit an error
+                    // Collect that error here, and if it was an Io error, preserve it
+                    let error = match self.handle.take().unwrap().join() {
+                        Ok(result) => result,
+                        Err(e) => std::panic::resume_unwind(e),
+                    };
+                    match error {
+                        Ok(()) => std::panic::resume_unwind(Box::new(error)), // something weird happened
+                        Err(GzpError::Io(ioerr)) => ioerr,
+                        Err(err) => io::Error::new(io::ErrorKind::Other, err),
+                    }
+                })?;
             self.tx_compressor
                 .as_ref()
                 .unwrap()
                 .send(m)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                .map_err(|_send_error| {
+                    // If an error occured sending, that means the recievers have dropped an the compressor thread hit an error
+                    // Collect that error here, and if it was an Io error, preserve it
+                    let error = match self.handle.take().unwrap().join() {
+                        Ok(result) => result,
+                        Err(e) => std::panic::resume_unwind(e),
+                    };
+                    match error {
+                        Ok(()) => std::panic::resume_unwind(Box::new(error)), // something weird happened
+                        Err(GzpError::Io(ioerr)) => ioerr,
+                        Err(err) => io::Error::new(io::ErrorKind::Other, err),
+                    }
+                })?;
             self.buffer
                 .reserve(self.buffer_size.saturating_sub(self.buffer.len()));
         }
