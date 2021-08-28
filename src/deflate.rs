@@ -12,24 +12,28 @@
 //! # #[cfg(feature = "any_zlib")] {
 //! use std::{env, fs::File, io::Write};
 //!
-//! use gzp::{deflate::Zlib, parz::ParZ};
+//! use gzp::{deflate::Zlib, parz::{ParZ, ParZBuilder}, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParZ<Zlib> = ParZ::builder(writer).build();
+//! let mut parz: ParZ<Zlib> = ParZBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
 //! # }
 //! ```
 
+use std::io::Write;
+
 use bytes::Bytes;
+use flate2::write::{DeflateEncoder, GzEncoder, ZlibEncoder};
 use flate2::{Compress, FlushCompress};
 
 #[cfg(feature = "any_zlib")]
 use crate::check::Adler32;
 use crate::check::{Check, Crc32, PassThroughCheck};
 use crate::parz::Compression;
-use crate::{FormatSpec, GzpError, Pair};
+use crate::syncz::SyncZ;
+use crate::{FormatSpec, GzpError, Pair, SyncWriter, ZWriter};
 
 /// Gzip deflate stream with gzip header and footer.
 #[derive(Copy, Clone, Debug)]
@@ -104,6 +108,24 @@ impl FormatSpec for Gzip {
             Pair { num_bytes: 4, value: check.amount() as usize },
         ];
         self.to_bytes(&footer)
+    }
+}
+
+impl<W> SyncWriter<W> for Gzip
+where
+    W: Write,
+{
+    type OutputWriter = GzEncoder<W>;
+
+    fn sync_writer(writer: W, compression_level: Compression) -> GzEncoder<W> {
+        GzEncoder::new(writer, compression_level)
+    }
+}
+
+impl<W: Write> ZWriter for SyncZ<GzEncoder<W>> {
+    fn finish(&mut self) -> Result<(), GzpError> {
+        self.inner.take().unwrap().finish()?;
+        Ok(())
     }
 }
 
@@ -185,6 +207,26 @@ impl FormatSpec for Zlib {
     }
 }
 
+#[cfg(feature = "any_zlib")]
+impl<W> SyncWriter<W> for Zlib
+where
+    W: Write,
+{
+    type OutputWriter = ZlibEncoder<W>;
+
+    fn sync_writer(writer: W, compression_level: Compression) -> ZlibEncoder<W> {
+        ZlibEncoder::new(writer, compression_level)
+    }
+}
+
+#[cfg(feature = "any_zlib")]
+impl<W: Write> ZWriter for SyncZ<ZlibEncoder<W>> {
+    fn finish(&mut self) -> Result<(), GzpError> {
+        self.inner.take().unwrap().finish()?;
+        Ok(())
+    }
+}
+
 /// Produce a contiguous raw deflate
 #[derive(Copy, Clone, Debug)]
 pub struct RawDeflate {}
@@ -231,6 +273,24 @@ impl FormatSpec for RawDeflate {
     }
 }
 
+impl<W> SyncWriter<W> for RawDeflate
+where
+    W: Write,
+{
+    type OutputWriter = DeflateEncoder<W>;
+
+    fn sync_writer(writer: W, compression_level: Compression) -> DeflateEncoder<W> {
+        DeflateEncoder::new(writer, compression_level)
+    }
+}
+
+impl<W: Write> ZWriter for SyncZ<DeflateEncoder<W>> {
+    fn finish(&mut self) -> Result<(), GzpError> {
+        self.inner.take().unwrap().finish()?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::io::{Read, Write};
@@ -245,8 +305,9 @@ mod test {
     use proptest::prelude::*;
     use tempfile::tempdir;
 
-    use crate::parz::ParZ;
-    use crate::{BUFSIZE, DICT_SIZE};
+    use crate::parz::{ParZ, ParZBuilder};
+    use crate::syncz::SyncZBuilder;
+    use crate::{ZBuilder, ZWriter, BUFSIZE, DICT_SIZE};
 
     use super::*;
 
@@ -265,9 +326,42 @@ mod test {
         ";
 
         // Compress input to output
-        let mut par_gz: ParZ<Gzip> = ParZ::builder(out_writer).build();
+        let mut par_gz: ParZ<Gzip> = ParZBuilder::new().from_writer(out_writer);
         par_gz.write_all(input).unwrap();
         par_gz.finish().unwrap();
+
+        // Read output back in
+        let mut reader = BufReader::new(File::open(output_file).unwrap());
+        let mut result = vec![];
+        reader.read_to_end(&mut result).unwrap();
+
+        // Decompress it
+        let mut gz = GzDecoder::new(&result[..]);
+        let mut bytes = vec![];
+        gz.read_to_end(&mut bytes).unwrap();
+
+        // Assert decompressed output is equal to input
+        assert_eq!(input.to_vec(), bytes);
+    }
+
+    #[test]
+    fn test_simple_sync() {
+        let dir = tempdir().unwrap();
+
+        // Create output file
+        let output_file = dir.path().join("output.txt");
+        let out_writer = BufWriter::new(File::create(&output_file).unwrap());
+
+        // Define input bytes
+        let input = b"
+        This is a longer test than normal to come up with a bunch of text.
+        We'll read just a few lines at a time.
+        ";
+
+        // Compress input to output
+        let mut z = SyncZBuilder::<Gzip, _>::new().from_writer(out_writer);
+        z.write_all(input).unwrap();
+        z.finish().unwrap();
 
         // Read output back in
         let mut reader = BufReader::new(File::open(output_file).unwrap());
@@ -299,9 +393,43 @@ mod test {
         ";
 
         // Compress input to output
-        let mut par_gz: ParZ<Zlib> = ParZ::builder(out_writer).build();
+        let mut par_gz: ParZ<Zlib> = ParZBuilder::new().from_writer(out_writer);
         par_gz.write_all(input).unwrap();
         par_gz.finish().unwrap();
+
+        // Read output back in
+        let mut reader = BufReader::new(File::open(output_file).unwrap());
+        let mut result = vec![];
+        reader.read_to_end(&mut result).unwrap();
+
+        // Decompress it
+        let mut gz = ZlibDecoder::new(&result[..]);
+        let mut bytes = vec![];
+        gz.read_to_end(&mut bytes).unwrap();
+
+        // Assert decompressed output is equal to input
+        assert_eq!(input.to_vec(), bytes);
+    }
+
+    #[test]
+    #[cfg(feature = "any_zlib")]
+    fn test_simple_zlib_sync() {
+        let dir = tempdir().unwrap();
+
+        // Create output file
+        let output_file = dir.path().join("output.txt");
+        let out_writer = BufWriter::new(File::create(&output_file).unwrap());
+
+        // Define input bytes
+        let input = b"\
+        This is a longer test than normal to come up with a bunch of text.\n\
+        We'll read just a few lines at a time.\n\
+        ";
+
+        // Compress input to output
+        let mut z = SyncZBuilder::<Zlib, _>::new().from_writer(out_writer);
+        z.write_all(input).unwrap();
+        z.finish().unwrap();
 
         // Read output back in
         let mut reader = BufReader::new(File::open(output_file).unwrap());
@@ -342,10 +470,10 @@ mod test {
         ];
 
         // Compress input to output
-        let mut par_gz: ParZ<Gzip> = ParZ::builder(out_writer)
+        let mut par_gz: ParZ<Gzip> = ParZBuilder::new()
             .buffer_size(DICT_SIZE)
             .unwrap()
-            .build();
+            .from_writer(out_writer);
         par_gz.write_all(&input[..]).unwrap();
         par_gz.finish().unwrap();
 
@@ -369,7 +497,7 @@ mod test {
         fn test_all_gzip(
             input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)),
             buf_size in DICT_SIZE..BUFSIZE,
-            num_threads in 1..num_cpus::get(),
+            num_threads in 0..num_cpus::get(),
             write_size in 1..10_000usize,
         ) {
             let dir = tempdir().unwrap();
@@ -380,10 +508,51 @@ mod test {
 
 
             // Compress input to output
-            let mut par_gz: ParZ<Gzip> = ParZ::builder(out_writer)
-                .buffer_size(buf_size).unwrap()
-                .num_threads(num_threads).unwrap()
-                .build();
+            let mut par_gz: Box<dyn ZWriter> = if num_threads > 0 {
+                Box::new(ParZBuilder::<Gzip>::new()
+                    .buffer_size(buf_size).unwrap()
+                    .num_threads(num_threads).unwrap()
+                    .from_writer(out_writer))
+            } else {
+                Box::new(SyncZBuilder::<Gzip, _>::new().from_writer(out_writer))
+            };
+            for chunk in input.chunks(write_size) {
+                par_gz.write_all(chunk).unwrap();
+            }
+            par_gz.finish().unwrap();
+
+            dbg!(&output_file);
+            // std::process::exit(1);
+            // Read output back in
+            let mut reader = BufReader::new(File::open(output_file).unwrap());
+            let mut result = vec![];
+            reader.read_to_end(&mut result).unwrap();
+
+            // Decompress it
+            let mut gz = GzDecoder::new(&result[..]);
+            let mut bytes = vec![];
+            gz.read_to_end(&mut bytes).unwrap();
+
+            // Assert decompressed output is equal to input
+            assert_eq!(input.to_vec(), bytes);
+        }
+
+        #[test]
+        #[ignore]
+        fn test_all_gzip_zbuilder(
+            input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)),
+            num_threads in 0..num_cpus::get(),
+            write_size in 1..10_000usize,
+        ) {
+            let dir = tempdir().unwrap();
+
+            // Create output file
+            let output_file = dir.path().join("output.txt");
+            let out_writer = BufWriter::new(File::create(&output_file).unwrap());
+
+
+            // Compress input to output
+            let mut par_gz = ZBuilder::<Gzip, _>::new().num_threads(num_threads).from_writer(out_writer);
             for chunk in input.chunks(write_size) {
                 par_gz.write_all(chunk).unwrap();
             }
@@ -422,10 +591,14 @@ mod test {
 
 
             // Compress input to output
-            let mut par_gz: ParZ<Zlib> = ParZ::builder(out_writer)
-                .buffer_size(buf_size).unwrap()
-                .num_threads(num_threads).unwrap()
-                .build();
+            let mut par_gz: Box<dyn ZWriter> = if num_threads > 0 {
+                Box::new(ParZBuilder::<Zlib>::new()
+                    .buffer_size(buf_size).unwrap()
+                    .num_threads(num_threads).unwrap()
+                    .from_writer(out_writer))
+            } else {
+                Box::new(SyncZBuilder::<Zlib, _>::new().from_writer(out_writer))
+            };
             for chunk in input.chunks(write_size) {
                 par_gz.write_all(chunk).unwrap();
             }

@@ -6,10 +6,10 @@
 //! # #[cfg(feature = "deflate")] {
 //! use std::{env, fs::File, io::Write};
 //!
-//! use gzp::{parz::ParZ, deflate::Gzip};
+//! use gzp::{parz::{ParZ, ParZBuilder}, deflate::Gzip, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParZ<Gzip> = ParZ::builder(writer).build();
+//! let mut parz: ParZ<Gzip> = ParZBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
@@ -24,18 +24,16 @@ use bytes::{Bytes, BytesMut};
 pub use flate2::Compression;
 use flume::{bounded, Receiver, Sender};
 
-use crate::{Check, CompressResult, FormatSpec, GzpError, Message, BUFSIZE, DICT_SIZE};
+use crate::{Check, CompressResult, FormatSpec, GzpError, Message, ZWriter, BUFSIZE, DICT_SIZE};
 
 /// The [`ParZ`] builder.
 #[derive(Debug)]
-pub struct ParZBuilder<W, F>
+pub struct ParZBuilder<F>
 where
     F: FormatSpec,
 {
     /// The buffersize accumulate before trying to compress it. Defaults to [`BUFSIZE`].
     buffer_size: usize,
-    /// The underlying writer to write to.
-    writer: W,
     /// The number of threads to use for compression. Defaults to all available threads.
     num_threads: usize,
     /// The compression level of the output, see [`Compression`].
@@ -44,16 +42,14 @@ where
     format: F,
 }
 
-impl<W, F> ParZBuilder<W, F>
+impl<F> ParZBuilder<F>
 where
-    W: Send + Write + 'static,
     F: FormatSpec,
 {
     /// Create a new [`ParZBuilder`] object.
-    pub fn new(writer: W) -> Self {
+    pub fn new() -> Self {
         Self {
             buffer_size: BUFSIZE,
-            writer,
             num_threads: num_cpus::get(),
             compression_level: Compression::new(3),
             format: F::new(),
@@ -95,7 +91,7 @@ where
     }
 
     /// Create a configured [`ParZ`] object.
-    pub fn build(self) -> ParZ<F> {
+    pub fn from_writer<W: Write + Send + 'static>(self, writer: W) -> ParZ<F> {
         let (tx_compressor, rx_compressor) = bounded(self.num_threads * 2);
         let (tx_writer, rx_writer) = bounded(self.num_threads * 2);
         let buffer_size = self.buffer_size;
@@ -105,16 +101,16 @@ where
             ParZ::run(
                 &rx_compressor,
                 &rx_writer,
-                self.writer,
+                writer,
                 self.num_threads,
                 comp_level,
                 format,
             )
         });
         ParZ {
-            handle,
-            tx_compressor,
-            tx_writer,
+            handle: Some(handle),
+            tx_compressor: Some(tx_compressor),
+            tx_writer: Some(tx_writer),
             dictionary: None,
             buffer: BytesMut::with_capacity(buffer_size),
             buffer_size,
@@ -123,14 +119,23 @@ where
     }
 }
 
+impl<F> Default for ParZBuilder<F>
+where
+    F: FormatSpec,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[allow(unused)]
 pub struct ParZ<F>
 where
     F: FormatSpec,
 {
-    handle: std::thread::JoinHandle<Result<(), GzpError>>,
-    tx_compressor: Sender<Message<F::C>>,
-    tx_writer: Sender<Receiver<CompressResult<F::C>>>,
+    handle: Option<std::thread::JoinHandle<Result<(), GzpError>>>,
+    tx_compressor: Option<Sender<Message<F::C>>>,
+    tx_writer: Option<Sender<Receiver<CompressResult<F::C>>>>,
     buffer: BytesMut,
     dictionary: Option<Bytes>,
     buffer_size: usize,
@@ -142,11 +147,8 @@ where
     F: FormatSpec,
 {
     /// Create a builder to configure the [`ParZ`] runtime.
-    pub fn builder<W>(writer: W) -> ParZBuilder<W, F>
-    where
-        W: Write + Send + 'static,
-    {
-        ParZBuilder::new(writer)
+    pub fn builder() -> ParZBuilder<F> {
+        ParZBuilder::new()
     }
 
     /// Launch threads to compress chunks and coordinate sending compressed results
@@ -215,6 +217,9 @@ where
     ///
     /// If this is the last buffer to be sent, set `is_last` to false to trigger compression
     /// stream completion.
+    ///
+    /// # Panics
+    /// - If called after `finish`
     fn flush_last(&mut self, is_last: bool) -> std::io::Result<()> {
         let (mut m, r) = Message::new_parts(
             self.buffer.split().freeze(),
@@ -227,28 +232,52 @@ where
         }
 
         self.tx_writer
+            .as_ref()
+            .unwrap()
             .send(r)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         self.tx_compressor
+            .as_ref()
+            .unwrap()
             .send(m)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         Ok(())
     }
+}
 
+impl<F> ZWriter for ParZ<F>
+where
+    F: FormatSpec,
+{
     /// Flush the buffers and wait on all threads to finish working.
     ///
     /// This *MUST* be called before the [`ParZ`] object goes out of scope.
     ///
     /// # Errors
     /// - [`GzpError`] if there is an issue flushing the last blocks or an issue joining on the writer thread
-    pub fn finish(mut self) -> Result<(), GzpError> {
+    ///
+    /// # Panics
+    /// - If called twice
+    fn finish(&mut self) -> Result<(), GzpError> {
         self.flush_last(true)?;
-        drop(self.tx_compressor);
-        drop(self.tx_writer);
-        match self.handle.join() {
+        drop(self.tx_compressor.take());
+        drop(self.tx_writer.take());
+        match self.handle.take().unwrap().join() {
             Ok(result) => result,
             Err(e) => std::panic::resume_unwind(e),
         }
+    }
+}
+
+impl<F> Drop for ParZ<F>
+where
+    F: FormatSpec,
+{
+    fn drop(&mut self) {
+        if self.tx_compressor.is_some() && self.tx_writer.is_some() && self.handle.is_some() {
+            self.finish().unwrap();
+        }
+        // Resources already cleaned up if channels and handle are None
     }
 }
 
@@ -257,6 +286,9 @@ where
     F: FormatSpec,
 {
     /// Write a buffer into this writer, returning how many bytes were written.
+    ///
+    /// # Panics
+    /// - If called after calling `finish`
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.buffer.extend_from_slice(buf);
         if self.buffer.len() > self.buffer_size {
@@ -269,9 +301,13 @@ where
                 None
             };
             self.tx_writer
+                .as_ref()
+                .unwrap()
                 .send(r)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
             self.tx_compressor
+                .as_ref()
+                .unwrap()
                 .send(m)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
             self.buffer

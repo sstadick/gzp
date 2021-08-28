@@ -56,29 +56,33 @@ Simple example
 ```rust
 use std::{env, fs::File, io::Write};
 
-use gzp::{deflate::Gzip, parz::ParZ};
+use gzp::{deflate::Gzip, ZBuilder, ZWriter};
 
-fn main() {
-    let file = env::args().skip(1).next().unwrap();
-    let writer = File::create(file).unwrap();
-    let mut parz: ParZ<Gzip> = ParGz::builder(writer).build();
-    parz.write_all(b"This is a first test line\n").unwrap();
-    parz.write_all(b"This is a second test line\n").unwrap();
-    parz.finish().unwrap();
-}
+let mut writer = vec![];
+// ZBuilder will return a trait object that transparent over `ParZ` or `SyncZ`
+let mut parz = ZBuilder::<Gzip, _>::new()
+    .num_threads(0)
+    .from_writer(writer);
+parz.write_all(b"This is a first test line\n").unwrap();
+parz.write_all(b"This is a second test line\n").unwrap();
+parz.finish().unwrap();
 ```
 
 An updated version of [pgz](https://github.com/vorner/pgz).
 
 ```rust
-use gzp::parz::ParZ;
+use gzp::{
+    ZWriter,
+    deflate::Gzip,
+    parz::{ParZ, ParZBuilder}
+};
 use std::io::{Read, Write};
 
 fn main() {
     let chunksize = 64 * (1 << 10) * 2;
 
     let stdout = std::io::stdout();
-    let mut writer: ParZ<Gzip> = ParZ::builder(stdout).build();
+    let mut writer: ParZ<Gzip> = ParZBuilder::new().from_writer(stdout);
 
     let stdin = std::io::stdin();
     let mut stdin = stdin.lock();
@@ -100,14 +104,14 @@ fn main() {
 Same thing but using Snappy instead.
 
 ```rust
-use gzp::{parz::ParZ, snap::Snap};
+use gzp::{parz::{ParZ, ParZBuilder}, snap::Snap};
 use std::io::{Read, Write};
 
 fn main() {
     let chunksize = 64 * (1 << 10) * 2;
 
     let stdout = std::io::stdout();
-    let mut writer: ParZ<Snap> = ParZ::builder(stdout).build();
+    let mut writer: ParZ<Snap> = ParZBuilder::new().from_writer(stdout);
 
     let stdin = std::io::stdin();
     let mut stdin = stdin.lock();

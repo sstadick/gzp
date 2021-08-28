@@ -1,3 +1,11 @@
+# v0.7.0
+
+This release adds the `SyncZ` type as well as many API changes.
+The cumulative result is that with this release `ZBuilder` can be used to return a `Box<dyn ZWriter>` trait object that will use `ParZ` if `num_threads > 1`, otherwise it will fall back to using `SyncZ`.
+This allows calling code to use `gzp` regardless of the number of threads which could likely be 0 in some cases.
+
+See [PR13](https://github.com/sstadick/gzp/pull/13).
+
 # v0.6.0
 
 This release brings performance improvements across the board, but especially for for resource restricted systems.
