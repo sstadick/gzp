@@ -24,10 +24,12 @@ use std::{
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{BufMut, Bytes, BytesMut};
 pub use flate2::Compression;
-use flate2::{bufread::GzDecoder, Decompress};
+use flate2::{bufread::GzDecoder, Decompress, FlushDecompress};
 use flume::{bounded, unbounded, Receiver, Sender};
 
-use crate::{Check, CompressResult, FormatSpec, GzpError, Message, ZWriter, BUFSIZE, DICT_SIZE};
+use crate::{
+    check::Crc32, Check, CompressResult, FormatSpec, GzpError, Message, ZWriter, BUFSIZE, DICT_SIZE,
+};
 
 #[derive(Debug)]
 pub struct ParDecompressBuilder<F>
@@ -126,16 +128,30 @@ where
         R: Read + Send + 'static,
     {
         let (tx, rx): (Sender<DMessage>, Receiver<DMessage>) = bounded(num_threads * 2);
+        eprintln!("Got {} threads", num_threads);
 
         let handles: Vec<JoinHandle<Result<(), GzpError>>> = (0..num_threads)
             .map(|_| {
                 let rx = rx.clone();
                 std::thread::spawn(move || -> Result<(), GzpError> {
                     while let Ok(m) = rx.recv() {
-                        eprintln!("In decompressor loop");
-                        let mut decoder = GzDecoder::new(&m.buffer[..]);
-                        let mut result = vec![];
-                        decoder.read_to_end(&mut result).unwrap();
+                        let check_value = LittleEndian::read_u32(
+                            &m.buffer[m.buffer.len() - 8..m.buffer.len() - 4],
+                        );
+                        let orig_size = LittleEndian::read_u32(&m.buffer[m.buffer.len() - 4..]);
+                        let mut result = Vec::with_capacity(orig_size as usize);
+
+                        let mut decoder = Decompress::new(false);
+                        decoder
+                            .decompress_vec(
+                                &m.buffer[..m.buffer.len() - 8],
+                                &mut result,
+                                FlushDecompress::Finish,
+                            )
+                            .unwrap();
+                        let mut check = Crc32::new();
+                        check.update(&result);
+                        assert!(check.sum() == check_value);
                         // TODO:  Add result type
                         m.oneshot.send(BytesMut::from(&result[..])).unwrap();
                     }
@@ -153,16 +169,15 @@ where
             // Read the first 28 bytes
             let mut buf = vec![0; 20];
             if let Ok(()) = reader.read_exact(&mut buf) {
-                let size = LittleEndian::read_u32(dbg!(&buf[16..])) as usize;
-                dbg!(size);
+                let size = LittleEndian::read_u32(&buf[16..]) as usize;
                 let mut remainder = vec![0; size - 20];
                 if let Ok(()) = reader.read_exact(&mut remainder) {
-                    let mut bytes = BytesMut::with_capacity(size);
-                    bytes.extend_from_slice(&buf);
-                    bytes.extend_from_slice(&remainder);
-                    let (m, r) = DMessage::new_parts(bytes.freeze(), None);
+                    // let mut bytes = BytesMut::with_capacity(size);
+                    // bytes.extend_from_slice(&buf);
+                    // bytes.extend_from_slice(&remainder);
+                    let (m, r) = DMessage::new_parts(Bytes::from(remainder), None);
 
-                    tx_reader.send(r);
+                    tx_reader.send(r).unwrap();
                     tx.send(m).unwrap();
                     // Put a placeholder oneshot channel in the "to user" queue
                 } else {
@@ -290,9 +305,6 @@ mod test {
         par_gz.write_all(input).unwrap();
         par_gz.finish().unwrap();
 
-        // dbg!(output_file);
-        // exit(1);
-
         // Read output back in
         let reader = BufReader::new(File::open(output_file).unwrap());
         let mut par_d = ParDecompressBuilder::<Mgzip>::new().from_reader(reader);
@@ -331,7 +343,6 @@ mod test {
             }
             par_gz.finish().unwrap();
 
-            dbg!(&output_file);
             // std::process::exit(1);
             // Read output back in
             let reader = BufReader::new(File::open(output_file).unwrap());
