@@ -85,6 +85,7 @@ pub mod par_decompress;
 pub mod check;
 #[cfg(feature = "deflate")]
 pub mod deflate;
+mod mgzip;
 pub mod parz;
 #[cfg(feature = "snappy")]
 pub mod snap;
