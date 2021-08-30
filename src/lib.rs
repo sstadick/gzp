@@ -80,6 +80,8 @@ use crate::check::Check;
 use crate::parz::{Compression, ParZBuilder};
 use crate::syncz::{SyncZ, SyncZBuilder};
 
+mod par_decompress;
+
 pub mod check;
 #[cfg(feature = "deflate")]
 pub mod deflate;

@@ -88,6 +88,7 @@ impl FormatSpec for Gzip {
         } else {
             0
         };
+
         let header = vec![
             Pair { num_bytes: 1, value: 31 }, // 0x1f in flate2
             Pair { num_bytes: 1, value: 139 }, // 0x8b in flate2
@@ -259,6 +260,7 @@ impl FormatSpec for RawDeflate {
         if let Some(dict) = dict {
             encoder.set_dictionary(&dict[..])?;
         }
+        // TODO: finish? on last block?
         encoder.compress_vec(input, &mut buffer, FlushCompress::Sync)?;
 
         Ok(buffer)
@@ -272,6 +274,124 @@ impl FormatSpec for RawDeflate {
         vec![]
     }
 }
+
+/// Produce an Mgzip encoder
+#[derive(Copy, Clone, Debug)]
+pub struct Mgzip {}
+
+#[allow(unused)]
+impl FormatSpec for Mgzip {
+    type C = PassThroughCheck;
+
+    fn new() -> Self {
+        Self {}
+    }
+
+    #[inline]
+    fn needs_dict(&self) -> bool {
+        false
+    }
+
+    #[inline]
+    fn encode(
+        &self,
+        input: &[u8],
+        compression_level: Compression,
+        dict: Option<&Bytes>,
+        is_last: bool,
+    ) -> Result<Vec<u8>, GzpError> {
+        // The plus 64 allows odd small sized blocks to extend up to a byte boundary
+        let mut buffer = Vec::with_capacity(input.len() + 64);
+        let mut encoder = Compress::new(compression_level, false);
+
+        encoder.compress_vec(input, &mut buffer, FlushCompress::Finish)?;
+
+        let mut check = Crc32::new();
+        check.update(input);
+
+        // Add header with total byte sizes
+        let mut header = self.header_inner(compression_level);
+        let footer = self.footer_inner(&check);
+        header.push(Pair {
+            num_bytes: 4,
+            value: buffer.len() + 28,
+        });
+        let mut header = self.to_bytes(&header);
+        header.extend(buffer.into_iter().chain(footer));
+
+        // Add byte footer
+        Ok(header)
+    }
+
+    fn header(&self, compression_leval: Compression) -> Vec<u8> {
+        vec![]
+    }
+
+    fn footer(&self, check: &Self::C) -> Vec<u8> {
+        vec![]
+    }
+}
+
+impl Mgzip {
+    #[rustfmt::skip]
+    fn header_inner(&self, compression_level: Compression) -> Vec<Pair> {
+        // Size = header + extra subfield size + filename with null terminator (if present) + datablock size (unknknown) + footer
+        // const size: u32  = 16 + 4 + 0 + 0 + 8;
+
+        let comp_value = if compression_level.level() >= Compression::best().level() {
+            2
+        } else if compression_level.level() <= Compression::fast().level() {
+            4
+        } else {
+            0
+        };
+
+        let header = vec![
+            Pair { num_bytes: 1, value: 31 },           // magic bytes 0x1f in flate2 
+            Pair { num_bytes: 1, value: 139 },          // magic bytes 0x8b in flate2
+            Pair { num_bytes: 1, value: 8 },            // compression method
+            Pair { num_bytes: 1, value: 4 },            // name / comment / extraflag
+            Pair { num_bytes: 4, value: 0 },            // mtime
+            Pair { num_bytes: 1, value: comp_value },   // Compression level
+            Pair { num_bytes: 1, value: 255 },          // OS
+            Pair { num_bytes: 2, value: 8},             // Extra flag length
+            Pair { num_bytes: 1, value: b'I' as usize}, // Mgzip subfield ID 1 
+            Pair { num_bytes: 1, value: b'G' as usize}, // MGzip subfield ID 2
+            Pair { num_bytes: 2, value: 4 },            // MGzip subfield len
+            // The size bytes are appended in the compressor function
+            // Pair { num_bytes: 4, value: size},           // MGzip block size (size of block)
+        ];
+        header
+    }
+
+    #[rustfmt::skip]
+    fn footer_inner(&self, check: &Crc32) -> Vec<u8> {
+        let footer = vec![
+            Pair { num_bytes: 4, value: check.sum() as usize },
+            Pair { num_bytes: 4, value: check.amount() as usize },
+        ];
+        self.to_bytes(&footer)
+    }
+}
+
+impl<W> SyncWriter<W> for Mgzip
+where
+    W: Write,
+{
+    type OutputWriter = GzEncoder<W>;
+
+    fn sync_writer(writer: W, compression_level: Compression) -> GzEncoder<W> {
+        GzEncoder::new(writer, compression_level)
+    }
+}
+
+// There is MultiGzEncoder type
+// impl<W: Write> ZWriter for SyncZ<FIXME<W>> {
+//     fn finish(&mut self) -> Result<(), GzpError> {
+//         self.inner.take().unwrap().finish()?;
+//         Ok(())
+//     }
+// }
 
 impl<W> SyncWriter<W> for RawDeflate
 where
@@ -299,9 +419,9 @@ mod test {
         io::{BufReader, BufWriter},
     };
 
-    use flate2::bufread::GzDecoder;
     #[cfg(feature = "any_zlib")]
     use flate2::bufread::ZlibDecoder;
+    use flate2::bufread::{GzDecoder, MultiGzDecoder};
     use proptest::prelude::*;
     use tempfile::tempdir;
 
@@ -310,6 +430,39 @@ mod test {
     use crate::{ZBuilder, ZWriter, BUFSIZE, DICT_SIZE};
 
     use super::*;
+
+    #[test]
+    fn test_simple_mgzip() {
+        let dir = tempdir().unwrap();
+
+        // Create output file
+        let output_file = dir.path().join("output.txt");
+        let out_writer = BufWriter::new(File::create(&output_file).unwrap());
+
+        // Define input bytes
+        let input = b"
+        This is a longer test than normal to come up with a bunch of text.
+        We'll read just a few lines at a time.
+        ";
+
+        // Compress input to output
+        let mut par_gz: ParZ<Mgzip> = ParZBuilder::new().from_writer(out_writer);
+        par_gz.write_all(input).unwrap();
+        par_gz.finish().unwrap();
+
+        // Read output back in
+        let mut reader = BufReader::new(File::open(output_file).unwrap());
+        let mut result = vec![];
+        reader.read_to_end(&mut result).unwrap();
+
+        // Decompress it
+        let mut gz = MultiGzDecoder::new(&result[..]);
+        let mut bytes = vec![];
+        gz.read_to_end(&mut bytes).unwrap();
+
+        // Assert decompressed output is equal to input
+        assert_eq!(input.to_vec(), bytes);
+    }
 
     #[test]
     fn test_simple() {
