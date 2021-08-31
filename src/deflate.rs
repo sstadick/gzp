@@ -24,9 +24,10 @@
 
 use std::io::Write;
 
+use byteorder::{ByteOrder, LittleEndian};
 use bytes::Bytes;
 use flate2::write::{DeflateEncoder, GzEncoder, ZlibEncoder};
-use flate2::{Compress, FlushCompress};
+use flate2::{Compress, Decompress, FlushCompress, FlushDecompress};
 
 #[cfg(feature = "any_zlib")]
 use crate::check::Adler32;
@@ -34,7 +35,9 @@ use crate::check::{Check, Crc32, PassThroughCheck};
 use crate::mgzip::MgzipSyncWriter;
 use crate::parz::Compression;
 use crate::syncz::SyncZ;
-use crate::{mgzip, FooterValues, FormatSpec, GzpError, Pair, SyncWriter, ZWriter};
+use crate::{
+    mgzip, BlockFormatSpec, FooterValues, FormatSpec, GzpError, Pair, SyncWriter, ZWriter,
+};
 
 /// Gzip deflate stream with gzip header and footer.
 #[derive(Copy, Clone, Debug)]
@@ -280,6 +283,35 @@ impl FormatSpec for RawDeflate {
 #[derive(Copy, Clone, Debug)]
 pub struct Mgzip {}
 
+impl BlockFormatSpec for Mgzip {
+    type B = Crc32;
+    #[inline]
+    fn decode_block(&self, input: &[u8], orig_size: usize) -> Result<Vec<u8>, GzpError> {
+        let mut result = Vec::with_capacity(orig_size);
+        let mut decoder = Decompress::new(false);
+        decoder.decompress_vec(&input, &mut result, FlushDecompress::Finish)?;
+        Ok(result)
+    }
+
+    #[inline]
+    fn check_header(&self, bytes: &[u8]) -> Result<(), GzpError> {
+        // Check that the extra field flag is set
+        if !(bytes[4] & 4 == 4) {
+            Err(GzpError::InvalidHeader("Extra field flag not set"))
+        } else if bytes[13] == b'I' && bytes[14] == b'G' {
+            // Check for IG in SID
+            Err(GzpError::InvalidHeader("Bad SID"))
+        } else {
+            Ok(())
+        }
+    }
+
+    #[inline]
+    fn get_block_size(&self, bytes: &[u8]) -> Result<usize, GzpError> {
+        Ok(LittleEndian::read_u32(&bytes[16..]) as usize)
+    }
+}
+
 #[allow(unused)]
 impl FormatSpec for Mgzip {
     type C = PassThroughCheck;
@@ -291,24 +323,6 @@ impl FormatSpec for Mgzip {
     #[inline]
     fn needs_dict(&self) -> bool {
         false
-    }
-
-    #[inline]
-    fn check_header(&self, bytes: &[u8]) -> Result<(), GzpError> {
-        // Check that the extra field flag is set
-        if !(bytes[4] & 4) {
-            Err(GzpError::InvalidHeader("Extra field flag not set"))
-        } else if bytes[13] == b'I' && bytes[14] == b'G' {
-            // Check for IG in SID
-            Err(GzpError::InvalidHeader("Bad SID"))
-        } else {
-            Ok(())
-        }
-    }
-
-    #[inline]
-    fn get_block_size(&self, _bytes: &[u8]) -> Result<usize, GzpError> {
-        Ok(LittleEndian::read_u32(&buf[16..]) as usize)
     }
 
     #[inline]

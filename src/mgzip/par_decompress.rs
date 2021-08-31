@@ -28,13 +28,14 @@ use flate2::{bufread::GzDecoder, Decompress, FlushDecompress};
 use flume::{bounded, unbounded, Receiver, Sender};
 
 use crate::{
-    check::Crc32, Check, CompressResult, FormatSpec, GzpError, Message, ZWriter, BUFSIZE, DICT_SIZE,
+    check::Crc32, BlockFormatSpec, Check, CompressResult, FormatSpec, GzpError, Message, ZWriter,
+    BUFSIZE, DICT_SIZE,
 };
 
 #[derive(Debug)]
 pub struct ParDecompressBuilder<F>
 where
-    F: FormatSpec,
+    F: BlockFormatSpec,
 {
     buffer_size: usize,
     num_threads: usize,
@@ -43,7 +44,7 @@ where
 
 impl<F> ParDecompressBuilder<F>
 where
-    F: FormatSpec,
+    F: BlockFormatSpec,
 {
     pub fn new() -> Self {
         Self {
@@ -88,7 +89,7 @@ where
 
 impl<F> Default for ParDecompressBuilder<F>
 where
-    F: FormatSpec,
+    F: BlockFormatSpec,
 {
     fn default() -> Self {
         Self::new()
@@ -98,7 +99,7 @@ where
 #[allow(unused)]
 pub struct ParDecompress<F>
 where
-    F: FormatSpec,
+    F: BlockFormatSpec,
 {
     handle: Option<std::thread::JoinHandle<Result<(), GzpError>>>,
     rx_reader: Option<Receiver<Receiver<BytesMut>>>,
@@ -109,7 +110,7 @@ where
 
 impl<F> ParDecompress<F>
 where
-    F: FormatSpec,
+    F: BlockFormatSpec,
 {
     pub fn builder() -> ParDecompressBuilder<F> {
         ParDecompressBuilder::new()
@@ -132,27 +133,21 @@ where
                 let rx = rx.clone();
                 std::thread::spawn(move || -> Result<(), GzpError> {
                     while let Ok(m) = rx.recv() {
-                        // TODO: stopped here
-                        // F::decode(input, orig_size)
-                        // F::check result
                         let check_values = format.get_footer_values(&m.buffer[..]);
+                        let result = format.decode_block(
+                            &m.buffer[..m.buffer.len() - 8],
+                            check_values.amount as usize,
+                        )?;
 
-                        let mut result = Vec::with_capacity(check_values.amount as usize);
-
-                        let mut decoder = Decompress::new(false);
-                        decoder
-                            .decompress_vec(
-                                &m.buffer[..m.buffer.len() - 8],
-                                &mut result,
-                                FlushDecompress::Finish,
-                            )
-                            .unwrap();
-                        let mut check = Crc32::new();
+                        let mut check = F::B::new();
                         check.update(&result);
-                        // TODO: add custom error for this
-                        assert!(check.sum() == check_values.sum);
-                        // TODO:  Add result type
-                        m.oneshot.send(BytesMut::from(&result[..])).unwrap();
+
+                        if check.sum() != check_values.sum {
+                            return Err(GzpError::InvalidCheck(check.sum(), check_values.sum));
+                        }
+                        m.oneshot
+                            .send(BytesMut::from(&result[..]))
+                            .map_err(|_e| GzpError::ChannelSend)?;
                     }
                     Ok(())
                 })
@@ -168,7 +163,7 @@ where
             let mut buf = vec![0; 20];
             if let Ok(()) = reader.read_exact(&mut buf) {
                 format.check_header(&buf);
-                let size = format.get_block_size(&buf);
+                let size = format.get_block_size(&buf)?;
                 let mut remainder = vec![0; size - 20];
                 reader.read_exact(&mut remainder)?;
                 let (m, r) = DMessage::new_parts(Bytes::from(remainder));
@@ -223,7 +218,7 @@ impl DMessage {
 
 impl<F> Read for ParDecompress<F>
 where
-    F: FormatSpec,
+    F: BlockFormatSpec,
 {
     // Ok(0) means done
     fn read(&mut self, mut buf: &mut [u8]) -> io::Result<usize> {
@@ -270,7 +265,7 @@ where
 
 impl<F> Drop for ParDecompress<F>
 where
-    F: FormatSpec,
+    F: BlockFormatSpec,
 {
     fn drop(&mut self) {
         self.finish().unwrap();
