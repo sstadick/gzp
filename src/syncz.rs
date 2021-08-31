@@ -1,4 +1,4 @@
-//! Single threaded compression that mimics the [`crate::parz::ParZ`] API and implements
+//! Single threaded compression that mimics the [`crate::par::compress::ParCompress`] API and implements
 //! [`crate::ZWriter`].
 use std::{
     io::{self, Write},

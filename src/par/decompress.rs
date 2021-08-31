@@ -16,21 +16,15 @@
 //! # }
 //! ```
 use std::{
-    io::{self, Read, Write},
-    process::exit,
+    io::{self, Read},
     thread::JoinHandle,
 };
 
-use byteorder::{ByteOrder, LittleEndian};
 use bytes::{BufMut, Bytes, BytesMut};
 pub use flate2::Compression;
-use flate2::{bufread::GzDecoder, Decompress, FlushDecompress};
 use flume::{bounded, unbounded, Receiver, Sender};
 
-use crate::{
-    check::Crc32, BlockFormatSpec, Check, CompressResult, FormatSpec, GzpError, Message, ZWriter,
-    BUFSIZE, DICT_SIZE,
-};
+use crate::{BlockFormatSpec, Check, GzpError, BUFSIZE, DICT_SIZE};
 
 #[derive(Debug)]
 pub struct ParDecompressBuilder<F>
@@ -158,11 +152,10 @@ where
 
         // Reader
         loop {
-            // TODO: probably make this a buffered reader??
             // Read gzip header
             let mut buf = vec![0; 20];
             if let Ok(()) = reader.read_exact(&mut buf) {
-                format.check_header(&buf);
+                format.check_header(&buf)?;
                 let size = format.get_block_size(&buf)?;
                 let mut remainder = vec![0; size - 20];
                 reader.read_exact(&mut remainder)?;
@@ -269,94 +262,5 @@ where
 {
     fn drop(&mut self) {
         self.finish().unwrap();
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use std::io::{Read, Write};
-    use std::process::exit;
-    use std::{
-        fs::File,
-        io::{BufReader, BufWriter},
-    };
-
-    use flate2::bufread::MultiGzDecoder;
-    use proptest::prelude::*;
-    use tempfile::tempdir;
-
-    use crate::deflate::Mgzip;
-    use crate::parz::{ParZ, ParZBuilder};
-    use crate::ZWriter;
-
-    use super::*;
-
-    #[test]
-    fn test_simple_mgzip_etoe() {
-        let dir = tempdir().unwrap();
-
-        // Create output file
-        let output_file = dir.path().join("output.txt");
-        let out_writer = BufWriter::new(File::create(&output_file).unwrap());
-
-        // Define input bytes
-        let input = b"
-        This is a longer test than normal to come up with a bunch of text.
-        We'll read just a few lines at a time.
-        ";
-
-        // Compress input to output
-        let mut par_gz: ParZ<Mgzip> = ParZBuilder::new().from_writer(out_writer);
-        par_gz.write_all(input).unwrap();
-        par_gz.finish().unwrap();
-
-        // Read output back in
-        let reader = BufReader::new(File::open(output_file).unwrap());
-        let mut par_d = ParDecompressBuilder::<Mgzip>::new().from_reader(reader);
-        let mut result = vec![];
-        par_d.read_to_end(&mut result).unwrap();
-
-        // Assert decompressed output is equal to input
-        assert_eq!(input.to_vec(), result);
-    }
-
-    proptest! {
-        #[test]
-        #[ignore]
-        fn test_all_mgzip(
-            input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)), // (DICT_SIZE * 10)),
-            buf_size in DICT_SIZE..BUFSIZE,
-            num_threads in 1..num_cpus::get(),
-            write_size in 1000..1001usize,
-        ) {
-            let dir = tempdir().unwrap();
-
-            // Create output file
-            let output_file = dir.path().join("output.txt");
-            let out_writer = BufWriter::new(File::create(&output_file).unwrap());
-
-
-            // Compress input to output
-            let mut par_gz = ParZBuilder::<Mgzip>::new()
-                    .buffer_size(buf_size).unwrap()
-                    .num_threads(num_threads).unwrap()
-                    .from_writer(out_writer);
-
-            for chunk in input.chunks(write_size) {
-                par_gz.write_all(chunk).unwrap();
-            }
-            par_gz.finish().unwrap();
-
-            // std::process::exit(1);
-            // Read output back in
-            let reader = BufReader::new(File::open(output_file).unwrap());
-            let mut reader = ParDecompressBuilder::<Mgzip>::new().num_threads(num_threads).unwrap().from_reader(reader);
-            let mut result = vec![];
-            reader.read_to_end(&mut result).unwrap();
-
-
-            // Assert decompressed output is equal to input
-            assert_eq!(input.to_vec(), result);
-        }
     }
 }

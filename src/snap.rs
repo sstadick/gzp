@@ -27,9 +27,8 @@ use bytes::Bytes;
 use snap::read::FrameEncoder;
 
 use crate::check::PassThroughCheck;
-use crate::parz::Compression;
 use crate::syncz::SyncZ;
-use crate::{FormatSpec, GzpError, SyncWriter, ZWriter};
+use crate::{Compression, FormatSpec, GzpError, SyncWriter, ZWriter};
 
 /// Produce snappy deflate stream
 #[derive(Copy, Clone, Debug)]

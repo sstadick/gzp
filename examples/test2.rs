@@ -4,15 +4,15 @@ mod example {
 
     use gzp::{
         deflate::Gzip,
-        parz::{Compression, ParZ, ParZBuilder},
-        ZWriter,
+        par::compress::{ParCompress, ParCompressBuilder},
+        Compression, ZWriter,
     };
 
     pub fn main() {
         let chunksize = 64 * (1 << 10) * 2;
 
         let stdout = std::io::stdout();
-        let mut writer: ParZ<Gzip> = ParZBuilder::new()
+        let mut writer: ParCompress<Gzip> = ParCompressBuilder::new()
             .compression_level(Compression::new(6))
             .from_writer(stdout);
 

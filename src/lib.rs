@@ -72,21 +72,34 @@ use std::fmt::Debug;
 use std::io::{self, Write};
 use std::marker::PhantomData;
 
+use byteorder::{ByteOrder, LittleEndian};
 use bytes::Bytes;
+use flate2::{Decompress, DecompressError};
+// Reexport
+pub use flate2::Compression;
 use flume::{unbounded, Receiver, Sender};
 use thiserror::Error;
 
 use crate::check::Check;
-use crate::parz::{Compression, ParZBuilder};
+use crate::par::compress::ParCompressBuilder;
 use crate::syncz::{SyncZ, SyncZBuilder};
-use byteorder::{ByteOrder, LittleEndian};
-use flate2::{Decompress, DecompressError};
 
+// TODO:
+// - Make sure good tests exist for Mgzip / are properly enabled
+// - Add bgzf format support
+// - Rename ZBuilder
+// - Make sure decmopressors can be called symmetrically like the ZWriter type stuff
+// - Make sure block size can be passed through
+// - Clean up exports
+// - Update docs and examples
+// - add to crabz, add homebrew and conda crabz
+
+mod bgzf;
 pub mod check;
 #[cfg(feature = "deflate")]
 pub mod deflate;
 mod mgzip;
-pub mod parz;
+pub mod par;
 #[cfg(feature = "snappy")]
 pub mod snap;
 pub mod syncz;
@@ -196,7 +209,7 @@ where
     {
         if self.num_threads > 1 {
             Box::new(
-                ParZBuilder::<F>::new()
+                ParCompressBuilder::<F>::new()
                     .compression_level(self.compression_level)
                     .num_threads(self.num_threads)
                     .unwrap()

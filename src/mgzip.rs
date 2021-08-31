@@ -4,18 +4,15 @@
 //! complete block (with header and footer) is.
 
 use std::fmt::Debug;
+use std::io;
 use std::io::Write;
 
-use byteorder::ByteOrder;
 use byteorder::{LittleEndian, WriteBytesExt};
-use bytes::buf::Limit;
 use bytes::BytesMut;
 use flate2::{Compress, Compression, FlushCompress};
 
 use crate::check::{Check, Crc32};
 use crate::{GzpError, BUFSIZE};
-
-pub mod par_decompress;
 
 /// A synchronous implementation of Mgzip.
 ///
@@ -126,9 +123,10 @@ where
     /// Write a buffer into this writer, returning how many bytes were written.
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.buffer.extend_from_slice(buf);
-        if self.buffer.len() > self.blocksize {
+        if self.buffer.len() >= self.blocksize {
             let b = self.buffer.split_to(self.blocksize).freeze();
-            let compressed = compress(&b[..], self.compression_level).unwrap();
+            let compressed = compress(&b[..], self.compression_level)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
             self.writer.write_all(&compressed)?;
         }
         Ok(buf.len())
@@ -138,8 +136,9 @@ where
     fn flush(&mut self) -> std::io::Result<()> {
         let b = self.buffer.split_to(self.buffer.len()).freeze();
         if !b.is_empty() {
-            let compressed = compress(&b[..], self.compression_level).unwrap();
-            self.writer.write_all(&compressed).unwrap();
+            let compressed = compress(&b[..], self.compression_level)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            self.writer.write_all(&compressed)?;
         }
         self.writer.flush()
     }
@@ -157,17 +156,13 @@ where
 #[cfg(test)]
 mod test {
     use std::io::{Read, Write};
-    use std::process::exit;
     use std::{
         fs::File,
         io::{BufReader, BufWriter},
     };
 
     use flate2::bufread::MultiGzDecoder;
-    use proptest::prelude::*;
     use tempfile::tempdir;
-
-    use crate::{BUFSIZE, DICT_SIZE};
 
     use super::*;
 
