@@ -346,3 +346,13 @@ where
         self.flush_last(false)
     }
 }
+
+// impl<Bgzf> Write for Parz<Bgzf> {
+//     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+//         todo!()
+//     }
+//
+//     fn flush(&mut self) -> io::Result<()> {
+//         todo!()
+//     }
+// }

@@ -1,4 +1,4 @@
-//! Parallel decompression.
+//! Parallel decompression for block type gzip formats (mgzip, bgzf)
 //!
 //! # Examples
 //!
@@ -6,10 +6,10 @@
 //! # #[cfg(feature = "deflate")] {
 //! use std::{env, fs::File, io::Write};
 //!
-//! use gzp::{parz::{ParZ, ParZBuilder}, deflate::Gzip, ZWriter};
+//! use gzp::{parz::{ParZ, ParZBuilder}, deflate::Mgzip, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParZ<Gzip> = ParZBuilder::new().from_writer(writer);
+//! let mut parz: ParZ<Mgzip> = ParZBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
@@ -79,8 +79,7 @@ where
         ParDecompress {
             handle: Some(handle),
             rx_reader: Some(rx_reader),
-            dictionary: None,
-            buffer: None,
+            buffer: BytesMut::new(),
             buffer_size,
             format,
         }
@@ -103,8 +102,7 @@ where
 {
     handle: Option<std::thread::JoinHandle<Result<(), GzpError>>>,
     rx_reader: Option<Receiver<Receiver<BytesMut>>>,
-    buffer: Option<BytesMut>,
-    dictionary: Option<Bytes>,
+    buffer: BytesMut,
     buffer_size: usize,
     format: F,
 }
@@ -128,18 +126,18 @@ where
         R: Read + Send + 'static,
     {
         let (tx, rx): (Sender<DMessage>, Receiver<DMessage>) = bounded(num_threads * 2);
-        eprintln!("Got {} threads", num_threads);
 
         let handles: Vec<JoinHandle<Result<(), GzpError>>> = (0..num_threads)
             .map(|_| {
                 let rx = rx.clone();
                 std::thread::spawn(move || -> Result<(), GzpError> {
                     while let Ok(m) = rx.recv() {
-                        let check_value = LittleEndian::read_u32(
-                            &m.buffer[m.buffer.len() - 8..m.buffer.len() - 4],
-                        );
-                        let orig_size = LittleEndian::read_u32(&m.buffer[m.buffer.len() - 4..]);
-                        let mut result = Vec::with_capacity(orig_size as usize);
+                        // TODO: stopped here
+                        // F::decode(input, orig_size)
+                        // F::check result
+                        let check_values = format.get_footer_values(&m.buffer[..]);
+
+                        let mut result = Vec::with_capacity(check_values.amount as usize);
 
                         let mut decoder = Decompress::new(false);
                         decoder
@@ -151,7 +149,8 @@ where
                             .unwrap();
                         let mut check = Crc32::new();
                         check.update(&result);
-                        assert!(check.sum() == check_value);
+                        // TODO: add custom error for this
+                        assert!(check.sum() == check_values.sum);
                         // TODO:  Add result type
                         m.oneshot.send(BytesMut::from(&result[..])).unwrap();
                     }
@@ -164,27 +163,20 @@ where
 
         // Reader
         loop {
-            // TODO: check sid
-            // TODO: probably make this a buffered reader
-            // Read the first 28 bytes
+            // TODO: probably make this a buffered reader??
+            // Read gzip header
             let mut buf = vec![0; 20];
             if let Ok(()) = reader.read_exact(&mut buf) {
-                let size = LittleEndian::read_u32(&buf[16..]) as usize;
+                format.check_header(&buf);
+                let size = format.get_block_size(&buf);
                 let mut remainder = vec![0; size - 20];
-                if let Ok(()) = reader.read_exact(&mut remainder) {
-                    // let mut bytes = BytesMut::with_capacity(size);
-                    // bytes.extend_from_slice(&buf);
-                    // bytes.extend_from_slice(&remainder);
-                    let (m, r) = DMessage::new_parts(Bytes::from(remainder), None);
+                reader.read_exact(&mut remainder)?;
+                let (m, r) = DMessage::new_parts(Bytes::from(remainder));
 
-                    tx_reader.send(r).unwrap();
-                    tx.send(m).unwrap();
-                    // Put a placeholder oneshot channel in the "to user" queue
-                } else {
-                    panic!("ahhhh")
-                }
+                tx_reader.send(r).unwrap();
+                tx.send(m).unwrap();
             } else {
-                break; // EOF or malformed
+                break; // EOF
             }
         }
         drop(tx);
@@ -197,27 +189,31 @@ where
                 Err(e) => std::panic::resume_unwind(e),
             })
     }
+
+    /// Close things in such a way as to get errors
+    fn finish(&mut self) -> Result<(), GzpError> {
+        drop(self.rx_reader.take());
+        match self.handle.take().unwrap().join() {
+            Ok(result) => result,
+            Err(e) => std::panic::resume_unwind(e),
+        }
+    }
 }
 
 #[derive(Debug)]
 pub(crate) struct DMessage {
     buffer: Bytes,
     oneshot: Sender<BytesMut>,
-    dictionary: Option<Bytes>,
     is_last: bool,
 }
 
 impl DMessage {
-    pub(crate) fn new_parts(
-        buffer: Bytes,
-        dictionary: Option<Bytes>,
-    ) -> (Self, Receiver<BytesMut>) {
+    pub(crate) fn new_parts(buffer: Bytes) -> (Self, Receiver<BytesMut>) {
         let (tx, rx) = unbounded();
         (
             DMessage {
                 buffer,
                 oneshot: tx,
-                dictionary,
                 is_last: false,
             },
             rx,
@@ -229,6 +225,7 @@ impl<F> Read for ParDecompress<F>
 where
     F: FormatSpec,
 {
+    // Ok(0) means done
     fn read(&mut self, mut buf: &mut [u8]) -> io::Result<usize> {
         let mut bytes_copied = 0;
         let asked_for_bytes = buf.len();
@@ -237,29 +234,33 @@ where
                 break;
             }
 
-            if self.buffer.is_some() && self.buffer.as_ref().unwrap().len() > 0 {
-                let curr_len = self.buffer.as_ref().unwrap().len();
+            // First try to use up anything in current buffer
+            if self.buffer.len() > 0 {
+                let curr_len = self.buffer.len();
                 let to_copy = &self
                     .buffer
-                    .as_mut()
-                    .unwrap()
                     .split_to(std::cmp::min(buf.remaining_mut(), curr_len));
 
                 buf.put(&to_copy[..]);
                 bytes_copied += to_copy.len();
-            } else if let Ok(new_buffer_chan) = self.rx_reader.as_mut().unwrap().recv() {
-                if let Ok(new_buffer) = new_buffer_chan.recv() {
-                    self.buffer = Some(new_buffer);
-                    // std::mem::replace(&mut self.buffer, Some(new_buffer));
-                } else {
-                    panic!("failed read from placeholder chan")
-                }
-            } else if self.rx_reader.as_ref().unwrap().is_disconnected()
-                && self.rx_reader.as_ref().unwrap().is_empty()
-            {
-                break;
             } else {
-                panic!("chan chan")
+                // Then pull from channel of buffers
+                match self.rx_reader.as_mut().unwrap().recv() {
+                    Ok(new_buffer_chan) => {
+                        self.buffer = new_buffer_chan
+                            .recv()
+                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                    }
+                    Err(e) => {
+                        if self.rx_reader.as_ref().unwrap().is_disconnected()
+                            && self.rx_reader.as_ref().unwrap().is_empty()
+                        {
+                            break;
+                        } else {
+                            return Err(io::Error::new(io::ErrorKind::Other, e));
+                        }
+                    }
+                }
             }
         }
 
@@ -267,9 +268,17 @@ where
     }
 }
 
+impl<F> Drop for ParDecompress<F>
+where
+    F: FormatSpec,
+{
+    fn drop(&mut self) {
+        self.finish().unwrap();
+    }
+}
+
 #[cfg(test)]
 mod test {
-
     use std::io::{Read, Write};
     use std::process::exit;
     use std::{
@@ -278,6 +287,7 @@ mod test {
     };
 
     use flate2::bufread::MultiGzDecoder;
+    use proptest::prelude::*;
     use tempfile::tempdir;
 
     use crate::deflate::Mgzip;
@@ -315,14 +325,13 @@ mod test {
         assert_eq!(input.to_vec(), result);
     }
 
-    use proptest::prelude::*;
-
     proptest! {
         #[test]
+        #[ignore]
         fn test_all_mgzip(
-            input in prop::collection::vec(0..u8::MAX, 1..10000), // (DICT_SIZE * 10)),
+            input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)), // (DICT_SIZE * 10)),
             buf_size in DICT_SIZE..BUFSIZE,
-            num_threads in 2..num_cpus::get(),
+            num_threads in 1..num_cpus::get(),
             write_size in 1000..1001usize,
         ) {
             let dir = tempdir().unwrap();

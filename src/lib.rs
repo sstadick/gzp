@@ -80,8 +80,6 @@ use crate::check::Check;
 use crate::parz::{Compression, ParZBuilder};
 use crate::syncz::{SyncZ, SyncZBuilder};
 
-pub mod par_decompress;
-
 pub mod check;
 #[cfg(feature = "deflate")]
 pub mod deflate;
@@ -114,6 +112,12 @@ pub enum GzpError {
 
     #[error(transparent)]
     DeflateCompress(#[from] flate2::CompressError),
+
+    #[error("Invalid block size: {0}")]
+    InvalidBlockSize(&'static str),
+
+    #[error("Invalid block header: {0}")]
+    InvalidHeader(&'static str),
 
     #[error(transparent)]
     Io(#[from] io::Error),
@@ -256,6 +260,13 @@ pub struct Pair {
     value: usize,
 }
 
+struct FooterValues {
+    /// The check sum
+    sum: u32,
+    /// The number of bytes that went into the sum
+    amount: u32,
+}
+
 /// Defines how to write the header and footer for each format.
 pub trait FormatSpec: Clone + Copy + Debug + Send + Sync + 'static {
     /// The Check type for this format.
@@ -272,6 +283,29 @@ pub trait FormatSpec: Clone + Copy + Debug + Send + Sync + 'static {
 
     /// Whether or not this format should try to use a dictionary.
     fn needs_dict(&self) -> bool;
+
+    /// Check that the header is expected for this format
+    #[inline]
+    fn check_header(&self, _bytes: &[u8]) -> Result<(), GzpError> {
+        Err(GzpError::InvalidHeader("Not Implemented?"))
+    }
+
+    /// Check that the header is expected for this format
+    #[inline]
+    fn get_block_size(&self, _bytes: &[u8]) -> Result<usize, GzpError> {
+        Err(GzpError::InvalidBlockSize("Not Implemented?"))
+    }
+
+    /// Get the check value and check sum from the footer
+    #[inline]
+    fn get_footer_values(&self, input: &[u8]) -> FooterValues {
+        let check_sum = LittleEndian::read_u32(&input[input.len() - 8..input.len() - 4]);
+        let check_amount = LittleEndian::read_u32(&input[input.len() - 4..]);
+        FooterValues {
+            sum: check_sum,
+            amount: check_amount,
+        }
+    }
 
     /// How to deflate bytes for this format. Returns deflated bytes.
     fn encode(
@@ -290,6 +324,7 @@ pub trait FormatSpec: Clone + Copy + Debug + Send + Sync + 'static {
 
     /// Convert a list of [`Pair`] into bytes.
     fn to_bytes(&self, pairs: &[Pair]) -> Vec<u8> {
+        // TODO: remove this in favor of byteorder
         // See the `put` function in pigz, which this is based on.
         let bytes_to_write = pairs
             .iter()
