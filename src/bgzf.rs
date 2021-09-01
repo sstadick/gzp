@@ -14,8 +14,10 @@ use flate2::{Compress, Compression, FlushCompress};
 use crate::check::{Check, Crc32};
 use crate::{GzpError, BUFSIZE};
 
-pub(crate) const BGZF_BLOCK_SIZE: usize = 65280; // default from bgzf, compress(BGZF_BLOCK_SIZE) < BGZF_MAX_BLOCK_SIZE
-pub(crate) const MAX_BGZF_BLOCK_SIZE: usize = 64 * 1024; // 65536 which is u16::MAX + 1
+pub(crate) const BGZF_BLOCK_SIZE: usize = 65280;
+// default from bgzf, compress(BGZF_BLOCK_SIZE) < BGZF_MAX_BLOCK_SIZE
+pub(crate) const MAX_BGZF_BLOCK_SIZE: usize = 64 * 1024;
+// 65536 which is u16::MAX + 1
 pub(crate) static BGZF_EOF: &[u8] = &[
     0x1f, 0x8b, // ID1, ID2
     0x08, // CM = DEFLATE

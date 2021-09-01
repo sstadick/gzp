@@ -74,9 +74,9 @@ use std::marker::PhantomData;
 
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::Bytes;
-use flate2::{Decompress, DecompressError};
 // Reexport
 pub use flate2::Compression;
+use flate2::DecompressError;
 use flume::{unbounded, Receiver, Sender};
 use thiserror::Error;
 
@@ -85,8 +85,7 @@ use crate::par::compress::ParCompressBuilder;
 use crate::syncz::{SyncZ, SyncZBuilder};
 
 // TODO:
-// - Make sure good tests exist for Mgzip / are properly enabled
-// - Add bgzf format support
+// - Clean up decompressor shutdown process
 // - Rename ZBuilder
 // - Make sure decmopressors can be called symmetrically like the ZWriter type stuff
 // - Make sure block size can be passed through
@@ -350,6 +349,7 @@ pub trait FormatSpec: Clone + Copy + Debug + Send + Sync + 'static {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
 pub struct FooterValues {
     /// The check sum
     sum: u32,
@@ -362,6 +362,9 @@ pub trait BlockFormatSpec: FormatSpec {
     /// This exists so that the [`FormatSpec::C`] can be [`PassThroughCheck`] and not try to generate
     /// an overall check value.
     type B: Check + Send + 'static;
+
+    const HEADER_SIZE: usize;
+
     /// How to a block inflate bytes for this format. Returns inflated bytes.
     fn decode_block(&self, input: &[u8], orig_size: usize) -> Result<Vec<u8>, GzpError>;
 

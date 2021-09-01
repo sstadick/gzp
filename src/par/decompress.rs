@@ -128,10 +128,14 @@ where
                 std::thread::spawn(move || -> Result<(), GzpError> {
                     while let Ok(m) = rx.recv() {
                         let check_values = format.get_footer_values(&m.buffer[..]);
-                        let result = format.decode_block(
-                            &m.buffer[..m.buffer.len() - 8],
-                            check_values.amount as usize,
-                        )?;
+                        let result = if check_values.amount != 0 {
+                            format.decode_block(
+                                &m.buffer[..m.buffer.len() - 8],
+                                check_values.amount as usize,
+                            )?
+                        } else {
+                            vec![]
+                        };
 
                         let mut check = F::B::new();
                         check.update(&result);
@@ -153,11 +157,11 @@ where
         // Reader
         loop {
             // Read gzip header
-            let mut buf = vec![0; 20];
+            let mut buf = vec![0; F::HEADER_SIZE];
             if let Ok(()) = reader.read_exact(&mut buf) {
                 format.check_header(&buf)?;
                 let size = format.get_block_size(&buf)?;
-                let mut remainder = vec![0; size - 20];
+                let mut remainder = vec![0; size - F::HEADER_SIZE];
                 reader.read_exact(&mut remainder)?;
                 let (m, r) = DMessage::new_parts(Bytes::from(remainder));
 
@@ -179,11 +183,17 @@ where
     }
 
     /// Close things in such a way as to get errors
-    fn finish(&mut self) -> Result<(), GzpError> {
-        drop(self.rx_reader.take());
-        match self.handle.take().unwrap().join() {
-            Ok(result) => result,
-            Err(e) => std::panic::resume_unwind(e),
+    pub fn finish(&mut self) -> Result<(), GzpError> {
+        if self.rx_reader.is_some() {
+            drop(self.rx_reader.take());
+        }
+        if self.handle.is_some() {
+            match self.handle.take().unwrap().join() {
+                Ok(result) => result,
+                Err(e) => std::panic::resume_unwind(e),
+            }
+        } else {
+            Ok(())
         }
     }
 }
@@ -231,27 +241,59 @@ where
 
                 buf.put(&to_copy[..]);
                 bytes_copied += to_copy.len();
-            } else {
+            } else if self.rx_reader.is_some() {
                 // Then pull from channel of buffers
                 match self.rx_reader.as_mut().unwrap().recv() {
                     Ok(new_buffer_chan) => {
-                        self.buffer = new_buffer_chan
-                            .recv()
-                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                        self.buffer = match new_buffer_chan.recv() {
+                            Ok(b) => b,
+                            Err(_recv_error) => {
+                                // If an error occurred receiving, that means the senders have been dropped and the
+                                // decompressor thread hit an error. Collect that error here, and if it was an Io
+                                // error, preserve it.
+                                let error = match self.handle.take().unwrap().join() {
+                                    Ok(result) => result,
+                                    Err(e) => std::panic::resume_unwind(e),
+                                };
+
+                                let err = match error {
+                                    Ok(()) => {
+                                        self.rx_reader.take();
+                                        break;
+                                    } // finished reading file
+                                    Err(GzpError::Io(ioerr)) => ioerr,
+                                    Err(err) => io::Error::new(io::ErrorKind::Other, err),
+                                };
+                                self.rx_reader.take();
+                                return Err(err);
+                            }
+                        };
                     }
-                    Err(e) => {
-                        if self.rx_reader.as_ref().unwrap().is_disconnected()
-                            && self.rx_reader.as_ref().unwrap().is_empty()
-                        {
-                            break;
-                        } else {
-                            return Err(io::Error::new(io::ErrorKind::Other, e));
-                        }
+                    Err(_recv_error) => {
+                        // If an error occurred receiving, that means the senders have been dropped and the
+                        // decompressor thread hit an error. Collect that error here, and if it was an Io
+                        // error, preserve it.
+                        let error = match self.handle.take().unwrap().join() {
+                            Ok(result) => result,
+                            Err(e) => std::panic::resume_unwind(e),
+                        };
+
+                        let err = match error {
+                            Ok(()) => {
+                                self.rx_reader.take();
+                                break;
+                            } // finished reading file
+                            Err(GzpError::Io(ioerr)) => ioerr,
+                            Err(err) => io::Error::new(io::ErrorKind::Other, err),
+                        };
+                        self.rx_reader.take();
+                        return Err(err);
                     }
                 }
+            } else {
+                break;
             }
         }
-
         Ok(bytes_copied)
     }
 }
@@ -261,6 +303,8 @@ where
     F: BlockFormatSpec,
 {
     fn drop(&mut self) {
-        self.finish().unwrap();
+        if self.rx_reader.is_some() {
+            self.finish().unwrap();
+        }
     }
 }

@@ -317,6 +317,9 @@ pub struct Mgzip {}
 
 impl BlockFormatSpec for Mgzip {
     type B = Crc32;
+
+    const HEADER_SIZE: usize = 20;
+
     #[inline]
     fn decode_block(&self, input: &[u8], orig_size: usize) -> Result<Vec<u8>, GzpError> {
         let mut result = Vec::with_capacity(orig_size);
@@ -328,7 +331,7 @@ impl BlockFormatSpec for Mgzip {
     #[inline]
     fn check_header(&self, bytes: &[u8]) -> Result<(), GzpError> {
         // Check that the extra field flag is set
-        if !(bytes[4] & 4 == 4) {
+        if !(bytes[3] & 4 == 4) {
             Err(GzpError::InvalidHeader("Extra field flag not set"))
         } else if bytes[13] == b'I' && bytes[14] == b'G' {
             // Check for IG in SID
@@ -405,6 +408,7 @@ pub struct Bgzf {}
 
 impl BlockFormatSpec for Bgzf {
     type B = Crc32;
+    const HEADER_SIZE: usize = 18;
     #[inline]
     fn decode_block(&self, input: &[u8], orig_size: usize) -> Result<Vec<u8>, GzpError> {
         let mut result = Vec::with_capacity(orig_size);
@@ -416,7 +420,7 @@ impl BlockFormatSpec for Bgzf {
     #[inline]
     fn check_header(&self, bytes: &[u8]) -> Result<(), GzpError> {
         // Check that the extra field flag is set
-        if !(bytes[4] & 4 == 4) {
+        if !(bytes[3] & 4 == 4) {
             Err(GzpError::InvalidHeader("Extra field flag not set"))
         } else if bytes[13] == b'B' && bytes[14] == b'C' {
             // Check for BC in SID
@@ -428,7 +432,7 @@ impl BlockFormatSpec for Bgzf {
 
     #[inline]
     fn get_block_size(&self, bytes: &[u8]) -> Result<usize, GzpError> {
-        Ok(LittleEndian::read_u16(&bytes[16..]) as usize)
+        Ok(LittleEndian::read_u16(&bytes[16..]) as usize + 1)
     }
 }
 
@@ -453,7 +457,11 @@ impl FormatSpec for Bgzf {
         dict: Option<&Bytes>,
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError> {
-        bgzf::compress(input, compression_level)
+        let mut bytes = bgzf::compress(input, compression_level)?;
+        if is_last {
+            bytes.extend(bgzf::BGZF_EOF);
+        }
+        Ok(bytes)
     }
 
     fn header(&self, compression_level: Compression) -> Vec<u8> {
@@ -482,6 +490,7 @@ impl<W: Write> ZWriter for SyncZ<BgzfSyncWriter<W>> {
         Ok(())
     }
 }
+
 #[cfg(test)]
 mod test {
     use std::io::{Read, Write};
@@ -496,12 +505,13 @@ mod test {
     use proptest::prelude::*;
     use tempfile::tempdir;
 
-    use super::*;
     use crate::bgzf::BGZF_BLOCK_SIZE;
     use crate::par::compress::{ParCompress, ParCompressBuilder};
     use crate::par::decompress::ParDecompressBuilder;
     use crate::syncz::SyncZBuilder;
     use crate::{ZBuilder, ZWriter, BUFSIZE, DICT_SIZE};
+
+    use super::*;
 
     #[test]
     fn test_simple_mgzip() {
@@ -835,6 +845,7 @@ mod test {
         let mut par_d = ParDecompressBuilder::<Bgzf>::new().from_reader(reader);
         let mut result = vec![];
         par_d.read_to_end(&mut result).unwrap();
+        par_d.finish().unwrap();
 
         // Assert decompressed output is equal to input
         assert_eq!(input.to_vec(), result);
@@ -870,7 +881,6 @@ mod test {
             }
             par_gz.finish().unwrap();
 
-            dbg!(&output_file);
             // std::process::exit(1);
             // Read output back in
             let mut reader = BufReader::new(File::open(output_file).unwrap());
@@ -1067,7 +1077,6 @@ mod test {
             }
             par_gz.finish().unwrap();
 
-            dbg!(&output_file);
             // std::process::exit(1);
             // Read output back in
             let mut reader = BufReader::new(File::open(output_file).unwrap());
