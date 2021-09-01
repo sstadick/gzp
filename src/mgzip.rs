@@ -14,6 +14,9 @@ use flate2::{Compress, Compression, FlushCompress};
 use crate::check::{Check, Crc32};
 use crate::{GzpError, BUFSIZE};
 
+const MGZIP_HEADER_SIZE: usize = 20;
+const MGZIP_FOOTER_SIZE: usize = 8;
+
 /// A synchronous implementation of Mgzip.
 ///
 /// **NOTE** use [crate::deflate::Mgzip] for a parallel implementation.
@@ -56,22 +59,53 @@ where
 /// Compress a block of bytes, adding a header and footer.
 #[inline]
 pub fn compress(input: &[u8], compression_level: Compression) -> Result<Vec<u8>, GzpError> {
-    // The plus 64 allows odd small sized blocks to extend up to a byte boundary
-    let mut buffer = Vec::with_capacity(input.len() + 64);
-    let mut encoder = Compress::new(compression_level, false);
+    #[cfg(feature = "libdeflate")]
+    {
+        // The plus 64 allows odd small sized blocks to extend up to a byte boundary
+        // let mut buffer = Vec::with_capacity(input.len() + 64);
+        let mut buffer = vec![0; MGZIP_HEADER_SIZE + input.len() + 64 + MGZIP_FOOTER_SIZE];
+        let mut encoder = libdeflater::Compressor::new(
+            libdeflater::CompressionLvl::new(compression_level.level() as i32)
+                .map_err(|e| GzpError::LibDeflaterCompressionLvl(e))?,
+        );
 
-    encoder.compress_vec(input, &mut buffer, FlushCompress::Finish)?;
+        let bytes_written = encoder
+            .deflate_compress(input, &mut buffer[MGZIP_HEADER_SIZE..])
+            .map_err(|e| GzpError::LibDeflaterCompress(e))?;
 
-    let mut check = Crc32::new();
-    check.update(input);
+        let mut check = libdeflater::Crc::new();
+        check.update(&input);
 
-    // Add header with total byte sizes
-    let mut header = header_inner(compression_level, buffer.len() as u32);
-    let footer = footer_inner(&check);
-    header.extend(buffer.into_iter().chain(footer));
+        // Add header with total byte sizes
+        let mut header = header_inner(compression_level, bytes_written as u32);
+        buffer[0..MGZIP_HEADER_SIZE].copy_from_slice(&header);
+        buffer.truncate(MGZIP_HEADER_SIZE + bytes_written);
 
-    // Add byte footer
-    Ok(header)
+        // let mut footer = Vec::with_capacity(8);
+        buffer.write_u32::<LittleEndian>(check.sum())?;
+        buffer.write_u32::<LittleEndian>(input.len() as u32)?;
+
+        Ok(buffer)
+    }
+    #[cfg(not(feature = "libdeflate"))]
+    {
+        // The plus 64 allows odd small sized blocks to extend up to a byte boundary
+        let mut buffer = Vec::with_capacity(input.len() + 64);
+        let mut encoder = Compress::new(compression_level, false);
+
+        encoder.compress_vec(input, &mut buffer, FlushCompress::Finish)?;
+
+        let mut check = Crc32::new();
+        check.update(input);
+
+        // Add header with total byte sizes
+        let mut header = header_inner(compression_level, buffer.len() as u32);
+        let footer = footer_inner(&check);
+        header.extend(buffer.into_iter().chain(footer));
+
+        // Add byte footer
+        Ok(header)
+    }
 }
 
 /// Create an mgzip style header

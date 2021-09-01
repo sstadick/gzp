@@ -34,6 +34,53 @@ pub trait Check {
         Self: Sized;
 }
 
+/// LibDeflates impl of CRC, this does not implement `combine`
+#[cfg(feature = "libdeflate")]
+pub struct LibDeflateCrc {
+    crc: libdeflater::Crc,
+    amount: u32,
+}
+
+#[cfg(feature = "libdeflate")]
+impl Check for LibDeflateCrc {
+    #[inline]
+    fn sum(&self) -> u32 {
+        self.crc.sum()
+    }
+
+    #[inline]
+    fn amount(&self) -> u32 {
+        self.amount
+    }
+
+    #[inline]
+    fn new() -> Self
+    where
+        Self: Sized,
+    {
+        Self {
+            crc: libdeflater::Crc::new(),
+            amount: 0,
+        }
+    }
+
+    #[inline]
+    fn update(&mut self, bytes: &[u8]) {
+        self.amount += bytes.len() as u32;
+        self.crc.update(bytes);
+    }
+
+    /// Not needed for or implemented for libdeflate.
+    ///
+    /// Calling this is an error.
+    fn combine(&mut self, _other: &Self)
+    where
+        Self: Sized,
+    {
+        unimplemented!()
+    }
+}
+
 /// The adler32 check implementation for zlib
 #[cfg(feature = "any_zlib")]
 pub struct Adler32 {

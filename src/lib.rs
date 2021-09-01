@@ -68,7 +68,7 @@
 //! parz.finish().unwrap();
 //! # }
 //! ```
-use std::fmt::Debug;
+use std::fmt::{Debug, Display, Formatter};
 use std::io::{self, Write};
 use std::marker::PhantomData;
 
@@ -141,6 +141,18 @@ pub enum GzpError {
 
     #[error(transparent)]
     Io(#[from] io::Error),
+
+    #[cfg(feature = "libdeflate")]
+    #[error("LibDeflater compression error: {0:?}")]
+    LibDeflaterCompress(libdeflater::CompressionError),
+
+    #[cfg(feature = "libdeflate")]
+    #[error("LibDelfater compression level error: {0:?}")]
+    LibDeflaterCompressionLvl(libdeflater::CompressionLvlError),
+
+    #[cfg(feature = "libdeflate")]
+    #[error(transparent)]
+    LibDelfaterDecompress(#[from] libdeflater::DecompressionError),
 
     #[error("Invalid number of threads ({0}) selected.")]
     NumThreads(usize),

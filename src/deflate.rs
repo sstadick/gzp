@@ -35,7 +35,7 @@ use crate::check::Adler32;
 use crate::check::{Check, Crc32, PassThroughCheck};
 use crate::mgzip::MgzipSyncWriter;
 use crate::syncz::SyncZ;
-use crate::{bgzf, mgzip, BlockFormatSpec, FormatSpec, GzpError, Pair, SyncWriter, ZWriter};
+use crate::{bgzf, check, mgzip, BlockFormatSpec, FormatSpec, GzpError, Pair, SyncWriter, ZWriter};
 
 //////////////////////////////////////////////////////////
 // GZIP
@@ -316,16 +316,30 @@ impl<W: Write> ZWriter for SyncZ<DeflateEncoder<W>> {
 pub struct Mgzip {}
 
 impl BlockFormatSpec for Mgzip {
+    #[cfg(feature = "libdeflate")]
+    type B = check::LibDeflateCrc;
+    #[cfg(not(feature = "libdeflate"))]
     type B = Crc32;
 
     const HEADER_SIZE: usize = 20;
 
     #[inline]
     fn decode_block(&self, input: &[u8], orig_size: usize) -> Result<Vec<u8>, GzpError> {
-        let mut result = Vec::with_capacity(orig_size);
-        let mut decoder = Decompress::new(false);
-        decoder.decompress_vec(&input, &mut result, FlushDecompress::Finish)?;
-        Ok(result)
+        #[cfg(feature = "libdeflate")]
+        {
+            let mut result = vec![0; orig_size];
+            let mut decoder = libdeflater::Decompressor::new();
+            let _bytes_decompressed = decoder.deflate_decompress(&input, &mut result)?;
+            Ok(result)
+        }
+
+        #[cfg(not(feature = "libdeflate"))]
+        {
+            let mut result = Vec::with_capacity(orig_size);
+            let mut decoder = Decompress::new(false);
+            decoder.decompress_vec(&input, &mut result, FlushDecompress::Finish)?;
+            Ok(result)
+        }
     }
 
     #[inline]
@@ -407,14 +421,29 @@ impl<W: Write> ZWriter for SyncZ<MgzipSyncWriter<W>> {
 pub struct Bgzf {}
 
 impl BlockFormatSpec for Bgzf {
+    #[cfg(feature = "libdeflate")]
+    type B = check::LibDeflateCrc;
+    #[cfg(not(feature = "libdeflate"))]
     type B = Crc32;
     const HEADER_SIZE: usize = 18;
+
     #[inline]
     fn decode_block(&self, input: &[u8], orig_size: usize) -> Result<Vec<u8>, GzpError> {
-        let mut result = Vec::with_capacity(orig_size);
-        let mut decoder = Decompress::new(false);
-        decoder.decompress_vec(&input, &mut result, FlushDecompress::Finish)?;
-        Ok(result)
+        #[cfg(feature = "libdeflate")]
+        {
+            let mut result = vec![0; orig_size];
+            let mut decoder = libdeflater::Decompressor::new();
+            let _bytes_decompressed = decoder.deflate_decompress(&input, &mut result)?;
+            Ok(result)
+        }
+
+        #[cfg(not(feature = "libdeflate"))]
+        {
+            let mut result = Vec::with_capacity(orig_size);
+            let mut decoder = Decompress::new(false);
+            decoder.decompress_vec(&input, &mut result, FlushDecompress::Finish)?;
+            Ok(result)
+        }
     }
 
     #[inline]

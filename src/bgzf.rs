@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use std::io;
 use std::io::Write;
 
-use byteorder::{LittleEndian, WriteBytesExt};
+use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
 use bytes::BytesMut;
 use flate2::{Compress, Compression, FlushCompress};
 
@@ -33,6 +33,20 @@ pub(crate) static BGZF_EOF: &[u8] = &[
     0x00, 0x00, 0x00, 0x00, // CRC32 = 0x00000000
     0x00, 0x00, 0x00, 0x00, // ISIZE = 0
 ];
+pub(crate) static BGZF_HEADER: [u8; BGZF_HEADER_SIZE] = [
+    0x1f, 0x8b, // ID1, ID2
+    0x08, // CM = DEFLATE
+    0x04, // FLG = FEXTRA
+    0x00, 0x00, 0x00, 0x00, // MTIME = 0
+    0x00, // XFL = 0 (compression level)
+    0xff, // OS = 255 (unknown)
+    0x06, 0x00, // XLEN = 6
+    0x42, 0x43, // SI1, SI2
+    0x02, 0x00, // SLEN = 2
+    0x00, 0x00, // BSIZE = 27
+];
+pub(crate) const BGZF_HEADER_SIZE: usize = 18;
+pub(crate) const BGZF_FOOTER_SIZE: usize = 8;
 
 /// A synchronous implementation of Bgzf.
 ///
@@ -77,27 +91,58 @@ where
 /// Compress a block of bytes, adding a header and footer.
 #[inline]
 pub fn compress(input: &[u8], compression_level: Compression) -> Result<Vec<u8>, GzpError> {
-    // The plus 64 allows odd small sized blocks to extend up to a byte boundary
-    let mut buffer = Vec::with_capacity(input.len() + 64);
-    let mut encoder = Compress::new(compression_level, false);
+    #[cfg(feature = "libdeflate")]
+    {
+        // The plus 64 allows odd small sized blocks to extend up to a byte boundary
+        // let mut buffer = Vec::with_capacity(input.len() + 64);
+        let mut buffer = vec![0; BGZF_HEADER_SIZE + input.len() + 64 + BGZF_FOOTER_SIZE];
+        let mut encoder = libdeflater::Compressor::new(
+            libdeflater::CompressionLvl::new(compression_level.level() as i32)
+                .map_err(|e| GzpError::LibDeflaterCompressionLvl(e))?,
+        );
 
-    encoder.compress_vec(input, &mut buffer, FlushCompress::Finish)?;
+        let bytes_written = encoder
+            .deflate_compress(input, &mut buffer[BGZF_HEADER_SIZE..])
+            .map_err(|e| GzpError::LibDeflaterCompress(e))?;
 
-    let mut check = Crc32::new();
-    check.update(input);
+        // Make sure that compressed buffer is smaller than
+        if !(bytes_written < MAX_BGZF_BLOCK_SIZE) {
+            return Err(GzpError::Unknown);
+        }
+        let mut check = libdeflater::Crc::new();
+        check.update(&input);
 
-    // Make sure that compressed buffer is smaller than
-    if !(buffer.len() < MAX_BGZF_BLOCK_SIZE) {
-        return Err(GzpError::Unknown);
+        // Add header with total byte sizes
+        let mut header = header_inner(compression_level, bytes_written as u16);
+        buffer[0..BGZF_HEADER_SIZE].copy_from_slice(&header);
+        buffer.truncate(BGZF_HEADER_SIZE + bytes_written);
+
+        // let mut footer = Vec::with_capacity(8);
+        buffer.write_u32::<LittleEndian>(check.sum())?;
+        buffer.write_u32::<LittleEndian>(input.len() as u32)?;
+
+        Ok(buffer)
     }
+    #[cfg(not(feature = "libdeflate"))]
+    {
+        // The plus 64 allows odd small sized blocks to extend up to a byte boundary
+        let mut buffer = Vec::with_capacity(input.len() + 64);
+        let mut encoder = Compress::new(compression_level, false);
+        encoder.compress_vec(input, &mut buffer, FlushCompress::Finish)?;
 
-    // Add header with total byte sizes
-    let mut header = header_inner(compression_level, buffer.len() as u16);
-    let footer = footer_inner(&check);
-    header.extend(buffer.into_iter().chain(footer));
+        // Make sure that compressed buffer is smaller than
+        if !(buffer.len() < MAX_BGZF_BLOCK_SIZE) {
+            return Err(GzpError::Unknown);
+        }
+        let mut check = Crc32::new();
+        check.update(input);
 
-    // Add byte footer
-    Ok(header)
+        // Add header with total byte sizes
+        let mut header = header_inner(compression_level, buffer.len() as u16);
+        let footer = footer_inner(&check);
+        header.extend(buffer.into_iter().chain(footer));
+        Ok(header)
+    }
 }
 
 /// Create an Bgzf style header
@@ -219,9 +264,9 @@ mod test {
         bgzf.write_all(input).unwrap();
         bgzf.flush().unwrap();
         drop(bgzf);
-        dbg!(output_file);
-        dbg!(orig_file);
-        std::process::exit(1);
+        // dbg!(output_file);
+        // dbg!(orig_file);
+        // std::process::exit(1);
 
         // Read output back in
         let mut reader = BufReader::new(File::open(output_file).unwrap());

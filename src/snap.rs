@@ -103,7 +103,7 @@ mod test {
     use snap::read::FrameDecoder;
     use tempfile::tempdir;
 
-    use crate::parz::{ParZ, ParZBuilder};
+    use crate::par::compress::{ParCompress, ParCompressBuilder};
     use crate::syncz::SyncZBuilder;
     use crate::{ZBuilder, ZWriter, BUFSIZE, DICT_SIZE};
 
@@ -124,7 +124,7 @@ mod test {
         ";
 
         // Compress input to output
-        let mut par_gz: ParZ<Snap> = ParZBuilder::new().from_writer(out_writer);
+        let mut par_gz: ParCompress<Snap> = ParCompressBuilder::new().from_writer(out_writer);
         par_gz.write_all(input).unwrap();
         par_gz.finish().unwrap();
 
@@ -160,7 +160,7 @@ mod test {
 
             // Compress input to output
             let mut par_gz: Box<dyn ZWriter> = if num_threads > 0 {
-                Box::new(ParZBuilder::<Snap>::new()
+                Box::new(ParCompressBuilder::<Snap>::new()
                     .buffer_size(buf_size).unwrap()
                     .num_threads(num_threads).unwrap()
                     .from_writer(out_writer))
