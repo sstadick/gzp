@@ -285,6 +285,9 @@ pub trait FormatSpec: Clone + Copy + Debug + Send + Sync + 'static {
     /// The Check type for this format.
     type C: Check + Send + 'static;
 
+    /// The default buffersize to use for this format
+    const DEFAULT_BUFSIZE: usize = BUFSIZE;
+
     /// Create a new instance of this format spec
     fn new() -> Self;
 

@@ -50,7 +50,7 @@ where
     /// Create a new [`ParZBuilder`] object.
     pub fn new() -> Self {
         Self {
-            buffer_size: BUFSIZE,
+            buffer_size: F::DEFAULT_BUFSIZE,
             num_threads: num_cpus::get(),
             compression_level: Compression::new(3),
             format: F::new(),

@@ -205,12 +205,23 @@ mod test {
         let input = b"
         This is a longer test than normal to come up with a bunch of text.
         We'll read just a few lines at a time.
+        What if this is a longer string, does that then make
+        things fail?
         ";
+
+        let orig_file = dir.path().join("orig.output.txt");
+        let mut orig_writer = BufWriter::new(File::create(&orig_file).unwrap());
+        orig_writer.write_all(input).unwrap();
+        drop(orig_writer);
 
         // Compress input to output
         let mut bgzf = BgzfSyncWriter::new(out_writer, Compression::new(3));
         bgzf.write_all(input).unwrap();
         bgzf.flush().unwrap();
+        drop(bgzf);
+        dbg!(output_file);
+        dbg!(orig_file);
+        std::process::exit(1);
 
         // Read output back in
         let mut reader = BufReader::new(File::open(output_file).unwrap());

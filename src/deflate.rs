@@ -29,7 +29,7 @@ use bytes::Bytes;
 use flate2::write::{DeflateEncoder, GzEncoder, ZlibEncoder};
 use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress};
 
-use crate::bgzf::BgzfSyncWriter;
+use crate::bgzf::{BgzfSyncWriter, BGZF_BLOCK_SIZE};
 #[cfg(feature = "any_zlib")]
 use crate::check::Adler32;
 use crate::check::{Check, Crc32, PassThroughCheck};
@@ -439,6 +439,8 @@ impl BlockFormatSpec for Bgzf {
 #[allow(unused)]
 impl FormatSpec for Bgzf {
     type C = PassThroughCheck;
+
+    const DEFAULT_BUFSIZE: usize = BGZF_BLOCK_SIZE;
 
     fn new() -> Self {
         Self {}
