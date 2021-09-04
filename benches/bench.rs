@@ -6,10 +6,10 @@ use flate2::write::GzEncoder;
 use tempfile::tempdir;
 
 use gzp::deflate::Gzip;
-use gzp::parz::{Compression, ParZ};
+use gzp::par::compress::ParCompressBuilder;
 use gzp::snap::Snap;
 use gzp::syncz::SyncZBuilder;
-use gzp::ZWriter;
+use gzp::{Compression, ZWriter};
 
 fn compress_with_gzip(num_threads: usize, buffer_size: usize, compression_level: u32) {
     let dir = tempdir().unwrap();
@@ -17,11 +17,11 @@ fn compress_with_gzip(num_threads: usize, buffer_size: usize, compression_level:
 
     let mut writer: Box<dyn ZWriter> = if num_threads > 0 {
         Box::new(
-            ParZ::<Gzip>::builder(output_file)
+            ParCompressBuilder::<Gzip>::new()
                 .num_threads(num_threads)
                 .unwrap()
                 .compression_level(Compression::new(compression_level))
-                .build(),
+                .from_writer(output_file),
         )
     } else {
         Box::new(
@@ -52,10 +52,10 @@ fn compress_with_snap(num_threads: usize, buffer_size: usize) {
     let output_file = File::create(dir.path().join("shakespeare_gzip.txt.gz")).unwrap();
     let mut writer: Box<dyn ZWriter> = if num_threads > 0 {
         Box::new(
-            ParZ::<Snap>::builder(output_file)
+            ParCompressBuilder::<Snap>::new()
                 .num_threads(num_threads)
                 .unwrap()
-                .build(),
+                .from_writer(output_file),
         )
     } else {
         Box::new(SyncZBuilder::<Snap, _>::new().from_writer(output_file))
