@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "gzp"
-version = "0.8.0"
+version = "0.8.1-alpha.0"
 dependencies = [
  "byteorder",
  "bytes",
