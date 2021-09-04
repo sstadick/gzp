@@ -1,3 +1,11 @@
+# v0.8.0
+
+- Adds support for Mgzip and BGZF compression and decompression
+- Large reorg of internal structure
+- Modest performance improvements reusing decompressors / compressors
+
+See [PR15](https://github.com/sstadick/gzp/pull/15)
+
 # v0.7.2
 
 - Fix snap feature flags

@@ -109,14 +109,14 @@ pub fn compress(
 
     let bytes_written = encoder
         .deflate_compress(input, &mut buffer[BGZF_HEADER_SIZE..])
-        .map_err(|e| GzpError::LibDeflaterCompress(e))?;
+        .map_err(GzpError::LibDeflaterCompress)?;
 
     // Make sure that compressed buffer is smaller than
-    if !(bytes_written < MAX_BGZF_BLOCK_SIZE) {
+    if bytes_written >= MAX_BGZF_BLOCK_SIZE {
         return Err(GzpError::Unknown);
     }
     let mut check = libdeflater::Crc::new();
-    check.update(&input);
+    check.update(input);
 
     // Add header with total byte sizes
     let header = header_inner(compression_level, bytes_written as u16);

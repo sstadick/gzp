@@ -26,8 +26,10 @@ use std::io::Write;
 
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::Bytes;
+#[cfg(feature = "any_zlib")]
+use flate2::write::ZlibEncoder;
 use flate2::{
-    write::{DeflateEncoder, GzEncoder, ZlibEncoder},
+    write::{DeflateEncoder, GzEncoder},
     Compress, Compression, FlushCompress,
 };
 #[cfg(not(feature = "libdeflate"))]
@@ -384,7 +386,7 @@ impl BlockFormatSpec for Mgzip {
         #[cfg(feature = "libdeflate")]
         {
             let mut result = vec![0; orig_size];
-            let _bytes_decompressed = decoder.deflate_decompress(&input, &mut result)?;
+            let _bytes_decompressed = decoder.deflate_decompress(input, &mut result)?;
             Ok(result)
         }
 
@@ -400,7 +402,7 @@ impl BlockFormatSpec for Mgzip {
     #[inline]
     fn check_header(&self, bytes: &[u8]) -> Result<(), GzpError> {
         // Check that the extra field flag is set
-        if !(bytes[3] & 4 == 4) {
+        if bytes[3] & 4 != 4 {
             Err(GzpError::InvalidHeader("Extra field flag not set"))
         } else if bytes[13] == b'I' && bytes[14] == b'G' {
             // Check for IG in SID
@@ -439,7 +441,7 @@ impl FormatSpec for Mgzip {
         {
             Ok(libdeflater::Compressor::new(
                 libdeflater::CompressionLvl::new(compression_level.level() as i32)
-                    .map_err(|e| GzpError::LibDeflaterCompressionLvl(e))?,
+                    .map_err(GzpError::LibDeflaterCompressionLvl)?,
             ))
         }
         #[cfg(not(feature = "libdeflate"))]
@@ -533,7 +535,7 @@ impl BlockFormatSpec for Bgzf {
         #[cfg(feature = "libdeflate")]
         {
             let mut result = vec![0; orig_size];
-            let _bytes_decompressed = decoder.deflate_decompress(&input, &mut result)?;
+            let _bytes_decompressed = decoder.deflate_decompress(input, &mut result)?;
             Ok(result)
         }
 
@@ -549,7 +551,7 @@ impl BlockFormatSpec for Bgzf {
     #[inline]
     fn check_header(&self, bytes: &[u8]) -> Result<(), GzpError> {
         // Check that the extra field flag is set
-        if !(bytes[3] & 4 == 4) {
+        if bytes[3] & 4 != 4 {
             Err(GzpError::InvalidHeader("Extra field flag not set"))
         } else if bytes[13] == b'B' && bytes[14] == b'C' {
             // Check for BC in SID
@@ -590,7 +592,7 @@ impl FormatSpec for Bgzf {
         {
             Ok(libdeflater::Compressor::new(
                 libdeflater::CompressionLvl::new(compression_level.level() as i32)
-                    .map_err(|e| GzpError::LibDeflaterCompressionLvl(e))?,
+                    .map_err(GzpError::LibDeflaterCompressionLvl)?,
             ))
         }
         #[cfg(not(feature = "libdeflate"))]

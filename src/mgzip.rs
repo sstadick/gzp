@@ -89,10 +89,10 @@ pub fn compress(
 
     let bytes_written = encoder
         .deflate_compress(input, &mut buffer[MGZIP_HEADER_SIZE..])
-        .map_err(|e| GzpError::LibDeflaterCompress(e))?;
+        .map_err(GzpError::LibDeflaterCompress)?;
 
     let mut check = libdeflater::Crc::new();
-    check.update(&input);
+    check.update(input);
 
     // Add header with total byte sizes
     let header = header_inner(compression_level, bytes_written as u32);

@@ -12,10 +12,10 @@
 //! # #[cfg(feature = "snappy")] {
 //! use std::{env, fs::File, io::Write};
 //!
-//! use gzp::{snap::Snap, parz::{ParZBuilder, ParZ}, ZWriter};
+//! use gzp::{snap::Snap, par::compress::{ParCompressBuilder, ParCompress}, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParZ<Snap> = ParZBuilder::new().from_writer(writer);
+//! let mut parz: ParCompress<Snap> = ParCompressBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();

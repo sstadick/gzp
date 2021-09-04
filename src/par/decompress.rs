@@ -223,7 +223,7 @@ where
             }
 
             // First try to use up anything in current buffer
-            if self.buffer.len() > 0 {
+            if !self.buffer.is_empty() {
                 let curr_len = self.buffer.len();
                 let to_copy = &self
                     .buffer
