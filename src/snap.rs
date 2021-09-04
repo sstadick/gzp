@@ -12,10 +12,10 @@
 //! # #[cfg(feature = "snappy")] {
 //! use std::{env, fs::File, io::Write};
 //!
-//! use gzp::{snap::Snap, parz::{ParZBuilder, ParZ}, ZWriter};
+//! use gzp::{snap::Snap, par::compress::{ParCompressBuilder, ParCompress}, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParZ<Snap> = ParZBuilder::new().from_writer(writer);
+//! let mut parz: ParCompress<Snap> = ParCompressBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
@@ -27,9 +27,8 @@ use bytes::Bytes;
 use snap::read::FrameEncoder;
 
 use crate::check::PassThroughCheck;
-use crate::parz::Compression;
 use crate::syncz::SyncZ;
-use crate::{FormatSpec, GzpError, SyncWriter, ZWriter};
+use crate::{Compression, FormatSpec, GzpError, SyncWriter, ZWriter};
 
 /// Produce snappy deflate stream
 #[derive(Copy, Clone, Debug)]
@@ -38,6 +37,8 @@ pub struct Snap {}
 #[allow(unused)]
 impl FormatSpec for Snap {
     type C = PassThroughCheck;
+    // TODO: use the raw Encoder and apply same optimizations ad DEFLATE formats
+    type Compressor = ();
 
     fn new() -> Self {
         Self {}
@@ -49,9 +50,18 @@ impl FormatSpec for Snap {
     }
 
     #[inline]
+    fn create_compressor(
+        &self,
+        compression_level: Compression,
+    ) -> Result<Self::Compressor, GzpError> {
+        Ok(())
+    }
+
+    #[inline]
     fn encode(
         &self,
         input: &[u8],
+        compressor: &mut Self::Compressor,
         compression_level: Compression,
         dict: Option<&Bytes>,
         is_last: bool,
@@ -104,7 +114,7 @@ mod test {
     use snap::read::FrameDecoder;
     use tempfile::tempdir;
 
-    use crate::parz::{ParZ, ParZBuilder};
+    use crate::par::compress::{ParCompress, ParCompressBuilder};
     use crate::syncz::SyncZBuilder;
     use crate::{ZBuilder, ZWriter, BUFSIZE, DICT_SIZE};
 
@@ -125,7 +135,7 @@ mod test {
         ";
 
         // Compress input to output
-        let mut par_gz: ParZ<Snap> = ParZBuilder::new().from_writer(out_writer);
+        let mut par_gz: ParCompress<Snap> = ParCompressBuilder::new().from_writer(out_writer);
         par_gz.write_all(input).unwrap();
         par_gz.finish().unwrap();
 
@@ -161,7 +171,7 @@ mod test {
 
             // Compress input to output
             let mut par_gz: Box<dyn ZWriter> = if num_threads > 0 {
-                Box::new(ParZBuilder::<Snap>::new()
+                Box::new(ParCompressBuilder::<Snap>::new()
                     .buffer_size(buf_size).unwrap()
                     .num_threads(num_threads).unwrap()
                     .from_writer(out_writer))

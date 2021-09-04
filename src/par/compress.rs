@@ -6,10 +6,10 @@
 //! # #[cfg(feature = "deflate")] {
 //! use std::{env, fs::File, io::Write};
 //!
-//! use gzp::{parz::{ParZ, ParZBuilder}, deflate::Gzip, ZWriter};
+//! use gzp::{par::compress::{ParCompress, ParCompressBuilder}, deflate::Gzip, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParZ<Gzip> = ParZBuilder::new().from_writer(writer);
+//! let mut parz: ParCompress<Gzip> = ParCompressBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
@@ -24,11 +24,12 @@ use bytes::{Bytes, BytesMut};
 pub use flate2::Compression;
 use flume::{bounded, Receiver, Sender};
 
-use crate::{Check, CompressResult, FormatSpec, GzpError, Message, ZWriter, BUFSIZE, DICT_SIZE};
+use crate::check::Check;
+use crate::{CompressResult, FormatSpec, GzpError, Message, ZWriter, DICT_SIZE};
 
 /// The [`ParZ`] builder.
 #[derive(Debug)]
-pub struct ParZBuilder<F>
+pub struct ParCompressBuilder<F>
 where
     F: FormatSpec,
 {
@@ -42,14 +43,14 @@ where
     format: F,
 }
 
-impl<F> ParZBuilder<F>
+impl<F> ParCompressBuilder<F>
 where
     F: FormatSpec,
 {
     /// Create a new [`ParZBuilder`] object.
     pub fn new() -> Self {
         Self {
-            buffer_size: BUFSIZE,
+            buffer_size: F::DEFAULT_BUFSIZE,
             num_threads: num_cpus::get(),
             compression_level: Compression::new(3),
             format: F::new(),
@@ -91,14 +92,14 @@ where
     }
 
     /// Create a configured [`ParZ`] object.
-    pub fn from_writer<W: Write + Send + 'static>(self, writer: W) -> ParZ<F> {
+    pub fn from_writer<W: Write + Send + 'static>(self, writer: W) -> ParCompress<F> {
         let (tx_compressor, rx_compressor) = bounded(self.num_threads * 2);
         let (tx_writer, rx_writer) = bounded(self.num_threads * 2);
         let buffer_size = self.buffer_size;
         let comp_level = self.compression_level;
         let format = self.format;
         let handle = std::thread::spawn(move || {
-            ParZ::run(
+            ParCompress::run(
                 &rx_compressor,
                 &rx_writer,
                 writer,
@@ -107,7 +108,7 @@ where
                 format,
             )
         });
-        ParZ {
+        ParCompress {
             handle: Some(handle),
             tx_compressor: Some(tx_compressor),
             tx_writer: Some(tx_writer),
@@ -119,7 +120,7 @@ where
     }
 }
 
-impl<F> Default for ParZBuilder<F>
+impl<F> Default for ParCompressBuilder<F>
 where
     F: FormatSpec,
 {
@@ -129,7 +130,7 @@ where
 }
 
 #[allow(unused)]
-pub struct ParZ<F>
+pub struct ParCompress<F>
 where
     F: FormatSpec,
 {
@@ -142,13 +143,13 @@ where
     format: F,
 }
 
-impl<F> ParZ<F>
+impl<F> ParCompress<F>
 where
     F: FormatSpec,
 {
     /// Create a builder to configure the [`ParZ`] runtime.
-    pub fn builder() -> ParZBuilder<F> {
-        ParZBuilder::new()
+    pub fn builder() -> ParCompressBuilder<F> {
+        ParCompressBuilder::new()
     }
 
     /// Launch threads to compress chunks and coordinate sending compressed results
@@ -169,10 +170,12 @@ where
             .map(|_| {
                 let rx = rx.clone();
                 std::thread::spawn(move || -> Result<(), GzpError> {
+                    let mut compressor = format.create_compressor(compression_level)?;
                     while let Ok(m) = rx.recv() {
                         let chunk = &m.buffer;
                         let buffer = format.encode(
                             chunk,
+                            &mut compressor,
                             compression_level,
                             m.dictionary.as_ref(),
                             m.is_last,
@@ -245,7 +248,7 @@ where
     }
 }
 
-impl<F> ZWriter for ParZ<F>
+impl<F> ZWriter for ParCompress<F>
 where
     F: FormatSpec,
 {
@@ -269,7 +272,7 @@ where
     }
 }
 
-impl<F> Drop for ParZ<F>
+impl<F> Drop for ParCompress<F>
 where
     F: FormatSpec,
 {
@@ -281,7 +284,7 @@ where
     }
 }
 
-impl<F> Write for ParZ<F>
+impl<F> Write for ParCompress<F>
 where
     F: FormatSpec,
 {

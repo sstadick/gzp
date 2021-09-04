@@ -24,10 +24,10 @@
 //! # #[cfg(feature = "deflate")] {
 //! use std::{env, fs::File, io::Write};
 //!
-//! use gzp::{deflate::Gzip, parz::{ParZ, ParZBuilder}, ZWriter};
+//! use gzp::{deflate::Gzip, par::compress::{ParCompress, ParCompressBuilder}, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParZ<Gzip> = ParZBuilder::new().from_writer(writer);
+//! let mut parz: ParCompress<Gzip> = ParCompressBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
@@ -72,18 +72,24 @@ use std::fmt::Debug;
 use std::io::{self, Write};
 use std::marker::PhantomData;
 
+use byteorder::{ByteOrder, LittleEndian};
 use bytes::Bytes;
+// Reexport
+pub use flate2::Compression;
+use flate2::DecompressError;
 use flume::{unbounded, Receiver, Sender};
 use thiserror::Error;
 
 use crate::check::Check;
-use crate::parz::{Compression, ParZBuilder};
+use crate::par::compress::ParCompressBuilder;
 use crate::syncz::{SyncZ, SyncZBuilder};
 
+mod bgzf;
 pub mod check;
 #[cfg(feature = "deflate")]
 pub mod deflate;
-pub mod parz;
+mod mgzip;
+pub mod par;
 #[cfg(feature = "snappy")]
 pub mod snap;
 pub mod syncz;
@@ -110,10 +116,34 @@ pub enum GzpError {
     ChannelReceive(#[from] flume::RecvError),
 
     #[error(transparent)]
+    DecompressError(#[from] DecompressError),
+
+    #[error(transparent)]
     DeflateCompress(#[from] flate2::CompressError),
+
+    #[error("Invalid block size: {0}")]
+    InvalidBlockSize(&'static str),
+
+    #[error("Invalid checksum, found {found}, expected {expected}")]
+    InvalidCheck { found: u32, expected: u32 },
+
+    #[error("Invalid block header: {0}")]
+    InvalidHeader(&'static str),
 
     #[error(transparent)]
     Io(#[from] io::Error),
+
+    #[cfg(feature = "libdeflate")]
+    #[error("LibDeflater compression error: {0:?}")]
+    LibDeflaterCompress(libdeflater::CompressionError),
+
+    #[cfg(feature = "libdeflate")]
+    #[error("LibDelfater compression level error: {0:?}")]
+    LibDeflaterCompressionLvl(libdeflater::CompressionLvlError),
+
+    #[cfg(feature = "libdeflate")]
+    #[error(transparent)]
+    LibDelfaterDecompress(#[from] libdeflater::DecompressionError),
 
     #[error("Invalid number of threads ({0}) selected.")]
     NumThreads(usize),
@@ -181,7 +211,7 @@ where
     {
         if self.num_threads > 1 {
             Box::new(
-                ParZBuilder::<F>::new()
+                ParCompressBuilder::<F>::new()
                     .compression_level(self.compression_level)
                     .num_threads(self.num_threads)
                     .unwrap()
@@ -257,6 +287,10 @@ pub struct Pair {
 pub trait FormatSpec: Clone + Copy + Debug + Send + Sync + 'static {
     /// The Check type for this format.
     type C: Check + Send + 'static;
+    type Compressor;
+
+    /// The default buffersize to use for this format
+    const DEFAULT_BUFSIZE: usize = BUFSIZE;
 
     /// Create a new instance of this format spec
     fn new() -> Self;
@@ -270,23 +304,31 @@ pub trait FormatSpec: Clone + Copy + Debug + Send + Sync + 'static {
     /// Whether or not this format should try to use a dictionary.
     fn needs_dict(&self) -> bool;
 
+    /// Create a thread local compressor
+    fn create_compressor(
+        &self,
+        compression_level: Compression,
+    ) -> Result<Self::Compressor, GzpError>;
+
     /// How to deflate bytes for this format. Returns deflated bytes.
     fn encode(
         &self,
         input: &[u8],
+        encoder: &mut Self::Compressor,
         compression_level: Compression,
         dict: Option<&Bytes>,
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError>;
 
     /// Generate a generic header for the given format.
-    fn header(&self, compression_leval: Compression) -> Vec<u8>;
+    fn header(&self, compression_level: Compression) -> Vec<u8>;
 
     /// Generate a genric footer for the format.
     fn footer(&self, check: &Self::C) -> Vec<u8>;
 
     /// Convert a list of [`Pair`] into bytes.
     fn to_bytes(&self, pairs: &[Pair]) -> Vec<u8> {
+        // TODO: remove this in favor of byteorder
         // See the `put` function in pigz, which this is based on.
         let bytes_to_write = pairs
             .iter()
@@ -318,5 +360,52 @@ pub trait FormatSpec: Clone + Copy + Debug + Send + Sync + 'static {
             }
         }
         buffer
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct FooterValues {
+    /// The check sum
+    sum: u32,
+    /// The number of bytes that went into the sum
+    amount: u32,
+}
+
+pub trait BlockFormatSpec: FormatSpec {
+    /// The Check type for this format for an individual block.
+    /// This exists so that the [`FormatSpec::C`] can be [`PassThroughCheck`] and not try to generate
+    /// an overall check value.
+    type B: Check + Send + 'static;
+    /// The type that will decompress bytes for this format
+    type Decompressor;
+
+    const HEADER_SIZE: usize;
+
+    /// Create a Decompressor for this format
+    fn create_decompressor(&self) -> Self::Decompressor;
+
+    /// How to a block inflate bytes for this format. Returns inflated bytes.
+    fn decode_block(
+        &self,
+        decoder: &mut Self::Decompressor,
+        input: &[u8],
+        orig_size: usize,
+    ) -> Result<Vec<u8>, GzpError>;
+
+    /// Check that the header is expected for this format
+    fn check_header(&self, _bytes: &[u8]) -> Result<(), GzpError>;
+
+    /// Check that the header is expected for this format
+    fn get_block_size(&self, _bytes: &[u8]) -> Result<usize, GzpError>;
+
+    /// Get the check value and check sum from the footer
+    #[inline]
+    fn get_footer_values(&self, input: &[u8]) -> FooterValues {
+        let check_sum = LittleEndian::read_u32(&input[input.len() - 8..input.len() - 4]);
+        let check_amount = LittleEndian::read_u32(&input[input.len() - 4..]);
+        FooterValues {
+            sum: check_sum,
+            amount: check_amount,
+        }
     }
 }
