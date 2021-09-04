@@ -37,6 +37,8 @@ pub struct Snap {}
 #[allow(unused)]
 impl FormatSpec for Snap {
     type C = PassThroughCheck;
+    // TODO: use the raw Encoder and apply same optimizations ad DEFLATE formats
+    type Compressor = ();
 
     fn new() -> Self {
         Self {}
@@ -48,9 +50,18 @@ impl FormatSpec for Snap {
     }
 
     #[inline]
+    fn create_compressor(
+        &self,
+        compression_level: Compression,
+    ) -> Result<Self::Compressor, GzpError> {
+        Ok(())
+    }
+
+    #[inline]
     fn encode(
         &self,
         input: &[u8],
+        compressor: &mut Self::Compressor,
         compression_level: Compression,
         dict: Option<&Bytes>,
         is_last: bool,

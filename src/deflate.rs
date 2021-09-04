@@ -12,10 +12,10 @@
 //! # #[cfg(feature = "any_zlib")] {
 //! use std::{env, fs::File, io::Write};
 //!
-//! use gzp::{deflate::Zlib, parz::{ParZ, ParZBuilder}, ZWriter};
+//! use gzp::{deflate::Zlib, par::compress::{ParCompress, ParCompressBuilder}, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParZ<Zlib> = ParZBuilder::new().from_writer(writer);
+//! let mut parz: ParCompress<Zlib> = ParCompressBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
@@ -26,8 +26,12 @@ use std::io::Write;
 
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::Bytes;
-use flate2::write::{DeflateEncoder, GzEncoder, ZlibEncoder};
-use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress};
+use flate2::{
+    write::{DeflateEncoder, GzEncoder, ZlibEncoder},
+    Compress, Compression, FlushCompress,
+};
+#[cfg(not(feature = "libdeflate"))]
+use flate2::{Decompress, FlushDecompress};
 
 use crate::bgzf::{BgzfSyncWriter, BGZF_BLOCK_SIZE};
 #[cfg(feature = "any_zlib")]
@@ -47,9 +51,18 @@ pub struct Gzip {}
 
 impl FormatSpec for Gzip {
     type C = Crc32;
+    type Compressor = Compress;
 
     fn new() -> Self {
         Self {}
+    }
+
+    #[inline]
+    fn create_compressor(
+        &self,
+        compression_level: Compression,
+    ) -> Result<Self::Compressor, GzpError> {
+        Ok(Compress::new(compression_level, false))
     }
 
     #[inline]
@@ -62,13 +75,14 @@ impl FormatSpec for Gzip {
     fn encode(
         &self,
         input: &[u8],
+        encoder: &mut Self::Compressor,
         compression_level: Compression,
         dict: Option<&Bytes>,
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError> {
         // The plus 16 allows odd small sized blocks to extend up to a byte boundary and end stream
         let mut buffer = Vec::with_capacity(input.len() + 64);
-        let mut encoder = Compress::new(compression_level, false);
+        // let mut encoder = Compress::new(compression_level, false);
         #[cfg(feature = "any_zlib")]
         if let Some(dict) = dict {
             encoder.set_dictionary(&dict[..])?;
@@ -82,6 +96,7 @@ impl FormatSpec for Gzip {
                 FlushCompress::Sync
             },
         )?;
+        encoder.reset();
         Ok(buffer)
     }
 
@@ -148,9 +163,18 @@ pub struct Zlib {}
 #[cfg(feature = "any_zlib")]
 impl FormatSpec for Zlib {
     type C = Adler32;
+    type Compressor = Compress;
 
     fn new() -> Self {
         Self {}
+    }
+
+    #[inline]
+    fn create_compressor(
+        &self,
+        compression_level: Compression,
+    ) -> Result<Self::Compressor, GzpError> {
+        Ok(Compress::new(compression_level, false))
     }
 
     #[inline]
@@ -162,13 +186,13 @@ impl FormatSpec for Zlib {
     fn encode(
         &self,
         input: &[u8],
-        compression_level: Compression,
+        encoder: &mut Self::Compressor,
+        _compression_level: Compression,
         dict: Option<&Bytes>,
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError> {
         // The plus 16 allows odd small sized blocks to extend up to a byte boundary and end stream
         let mut buffer = Vec::with_capacity(input.len() + 64);
-        let mut encoder = Compress::new(compression_level, false);
         #[cfg(feature = "any_zlib")]
         if let Some(dict) = dict {
             encoder.set_dictionary(&dict[..])?;
@@ -182,6 +206,7 @@ impl FormatSpec for Zlib {
                 FlushCompress::Sync
             },
         )?;
+        encoder.reset();
         Ok(buffer)
     }
 
@@ -249,9 +274,18 @@ pub struct RawDeflate {}
 #[allow(unused)]
 impl FormatSpec for RawDeflate {
     type C = PassThroughCheck;
+    type Compressor = Compress;
 
     fn new() -> Self {
         Self {}
+    }
+
+    #[inline]
+    fn create_compressor(
+        &self,
+        compression_level: Compression,
+    ) -> Result<Self::Compressor, GzpError> {
+        Ok(Compress::new(compression_level, false))
     }
 
     #[inline]
@@ -263,20 +297,21 @@ impl FormatSpec for RawDeflate {
     fn encode(
         &self,
         input: &[u8],
+        encoder: &mut Self::Compressor,
         compression_level: Compression,
         dict: Option<&Bytes>,
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError> {
         // The plus 8 allows odd small sized blocks to extend up to a byte boundary
         let mut buffer = Vec::with_capacity(input.len() + 64);
-        let mut encoder = Compress::new(compression_level, false);
+        // let mut encoder = Compress::new(compression_level, false);
         #[cfg(feature = "any_zlib")]
         if let Some(dict) = dict {
             encoder.set_dictionary(&dict[..])?;
         }
         // TODO: finish? on last block?
         encoder.compress_vec(input, &mut buffer, FlushCompress::Sync)?;
-
+        encoder.reset();
         Ok(buffer)
     }
 
@@ -319,25 +354,45 @@ impl BlockFormatSpec for Mgzip {
     #[cfg(feature = "libdeflate")]
     type B = check::LibDeflateCrc;
     #[cfg(not(feature = "libdeflate"))]
-    type B = Crc32;
+    type B = check::Crc32;
+
+    #[cfg(feature = "libdeflate")]
+    type Decompressor = libdeflater::Decompressor;
+    #[cfg(not(feature = "libdeflate"))]
+    type Decompressor = Decompress;
 
     const HEADER_SIZE: usize = 20;
 
+    fn create_decompressor(&self) -> Self::Decompressor {
+        #[cfg(feature = "libdeflate")]
+        {
+            libdeflater::Decompressor::new()
+        }
+        #[cfg(not(feature = "libdeflate"))]
+        {
+            Decompress::new(false)
+        }
+    }
+
     #[inline]
-    fn decode_block(&self, input: &[u8], orig_size: usize) -> Result<Vec<u8>, GzpError> {
+    fn decode_block(
+        &self,
+        decoder: &mut Self::Decompressor,
+        input: &[u8],
+        orig_size: usize,
+    ) -> Result<Vec<u8>, GzpError> {
         #[cfg(feature = "libdeflate")]
         {
             let mut result = vec![0; orig_size];
-            let mut decoder = libdeflater::Decompressor::new();
             let _bytes_decompressed = decoder.deflate_decompress(&input, &mut result)?;
             Ok(result)
         }
 
         #[cfg(not(feature = "libdeflate"))]
         {
-            let mut result = Vec::with_capacity(orig_size);
-            let mut decoder = Decompress::new(false);
+            let mut result = Vec::with_capacity(orig_size + 64);
             decoder.decompress_vec(&input, &mut result, FlushDecompress::Finish)?;
+            decoder.reset(false);
             Ok(result)
         }
     }
@@ -365,8 +420,32 @@ impl BlockFormatSpec for Mgzip {
 impl FormatSpec for Mgzip {
     type C = PassThroughCheck;
 
+    #[cfg(feature = "libdeflate")]
+    type Compressor = libdeflater::Compressor;
+
+    #[cfg(not(feature = "libdeflate"))]
+    type Compressor = Compress;
+
     fn new() -> Self {
         Self {}
+    }
+
+    #[inline]
+    fn create_compressor(
+        &self,
+        compression_level: Compression,
+    ) -> Result<Self::Compressor, GzpError> {
+        #[cfg(feature = "libdeflate")]
+        {
+            Ok(libdeflater::Compressor::new(
+                libdeflater::CompressionLvl::new(compression_level.level() as i32)
+                    .map_err(|e| GzpError::LibDeflaterCompressionLvl(e))?,
+            ))
+        }
+        #[cfg(not(feature = "libdeflate"))]
+        {
+            Ok(Compress::new(compression_level, false))
+        }
     }
 
     #[inline]
@@ -378,11 +457,12 @@ impl FormatSpec for Mgzip {
     fn encode(
         &self,
         input: &[u8],
+        encoder: &mut Self::Compressor,
         compression_level: Compression,
         dict: Option<&Bytes>,
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError> {
-        mgzip::compress(input, compression_level)
+        mgzip::compress(input, encoder, compression_level)
     }
 
     fn header(&self, compression_level: Compression) -> Vec<u8> {
@@ -424,15 +504,35 @@ impl BlockFormatSpec for Bgzf {
     #[cfg(feature = "libdeflate")]
     type B = check::LibDeflateCrc;
     #[cfg(not(feature = "libdeflate"))]
-    type B = Crc32;
+    type B = check::Crc32;
+
+    #[cfg(feature = "libdeflate")]
+    type Decompressor = libdeflater::Decompressor;
+    #[cfg(not(feature = "libdeflate"))]
+    type Decompressor = Decompress;
+
     const HEADER_SIZE: usize = 18;
 
+    fn create_decompressor(&self) -> Self::Decompressor {
+        #[cfg(feature = "libdeflate")]
+        {
+            libdeflater::Decompressor::new()
+        }
+        #[cfg(not(feature = "libdeflate"))]
+        {
+            Decompress::new(false)
+        }
+    }
     #[inline]
-    fn decode_block(&self, input: &[u8], orig_size: usize) -> Result<Vec<u8>, GzpError> {
+    fn decode_block(
+        &self,
+        decoder: &mut Self::Decompressor,
+        input: &[u8],
+        orig_size: usize,
+    ) -> Result<Vec<u8>, GzpError> {
         #[cfg(feature = "libdeflate")]
         {
             let mut result = vec![0; orig_size];
-            let mut decoder = libdeflater::Decompressor::new();
             let _bytes_decompressed = decoder.deflate_decompress(&input, &mut result)?;
             Ok(result)
         }
@@ -440,8 +540,8 @@ impl BlockFormatSpec for Bgzf {
         #[cfg(not(feature = "libdeflate"))]
         {
             let mut result = Vec::with_capacity(orig_size);
-            let mut decoder = Decompress::new(false);
             decoder.decompress_vec(&input, &mut result, FlushDecompress::Finish)?;
+            decoder.reset(false);
             Ok(result)
         }
     }
@@ -469,10 +569,34 @@ impl BlockFormatSpec for Bgzf {
 impl FormatSpec for Bgzf {
     type C = PassThroughCheck;
 
+    #[cfg(feature = "libdeflate")]
+    type Compressor = libdeflater::Compressor;
+
+    #[cfg(not(feature = "libdeflate"))]
+    type Compressor = Compress;
+
     const DEFAULT_BUFSIZE: usize = BGZF_BLOCK_SIZE;
 
     fn new() -> Self {
         Self {}
+    }
+
+    #[inline]
+    fn create_compressor(
+        &self,
+        compression_level: Compression,
+    ) -> Result<Self::Compressor, GzpError> {
+        #[cfg(feature = "libdeflate")]
+        {
+            Ok(libdeflater::Compressor::new(
+                libdeflater::CompressionLvl::new(compression_level.level() as i32)
+                    .map_err(|e| GzpError::LibDeflaterCompressionLvl(e))?,
+            ))
+        }
+        #[cfg(not(feature = "libdeflate"))]
+        {
+            Ok(Compress::new(compression_level, false))
+        }
     }
 
     #[inline]
@@ -484,11 +608,12 @@ impl FormatSpec for Bgzf {
     fn encode(
         &self,
         input: &[u8],
+        encoder: &mut Self::Compressor,
         compression_level: Compression,
         dict: Option<&Bytes>,
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError> {
-        let mut bytes = bgzf::compress(input, compression_level)?;
+        let mut bytes = bgzf::compress(input, encoder, compression_level)?;
         if is_last {
             bytes.extend(bgzf::BGZF_EOF);
         }

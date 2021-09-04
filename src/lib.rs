@@ -24,10 +24,10 @@
 //! # #[cfg(feature = "deflate")] {
 //! use std::{env, fs::File, io::Write};
 //!
-//! use gzp::{deflate::Gzip, parz::{ParZ, ParZBuilder}, ZWriter};
+//! use gzp::{deflate::Gzip, par::compress::{ParCompress, ParCompressBuilder}, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParZ<Gzip> = ParZBuilder::new().from_writer(writer);
+//! let mut parz: ParCompress<Gzip> = ParCompressBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
@@ -68,7 +68,7 @@
 //! parz.finish().unwrap();
 //! # }
 //! ```
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::Debug;
 use std::io::{self, Write};
 use std::marker::PhantomData;
 
@@ -83,15 +83,6 @@ use thiserror::Error;
 use crate::check::Check;
 use crate::par::compress::ParCompressBuilder;
 use crate::syncz::{SyncZ, SyncZBuilder};
-
-// TODO:
-// - Clean up decompressor shutdown process
-// - Rename ZBuilder
-// - Make sure decmopressors can be called symmetrically like the ZWriter type stuff
-// - Make sure block size can be passed through
-// - Clean up exports
-// - Update docs and examples
-// - add to crabz, add homebrew and conda crabz
 
 mod bgzf;
 pub mod check;
@@ -133,8 +124,8 @@ pub enum GzpError {
     #[error("Invalid block size: {0}")]
     InvalidBlockSize(&'static str),
 
-    #[error("Invalid checksum, found {0}, expected {1}")]
-    InvalidCheck(u32, u32),
+    #[error("Invalid checksum, found {found}, expected {expected}")]
+    InvalidCheck { found: u32, expected: u32 },
 
     #[error("Invalid block header: {0}")]
     InvalidHeader(&'static str),
@@ -296,6 +287,7 @@ pub struct Pair {
 pub trait FormatSpec: Clone + Copy + Debug + Send + Sync + 'static {
     /// The Check type for this format.
     type C: Check + Send + 'static;
+    type Compressor;
 
     /// The default buffersize to use for this format
     const DEFAULT_BUFSIZE: usize = BUFSIZE;
@@ -312,17 +304,24 @@ pub trait FormatSpec: Clone + Copy + Debug + Send + Sync + 'static {
     /// Whether or not this format should try to use a dictionary.
     fn needs_dict(&self) -> bool;
 
+    /// Create a thread local compressor
+    fn create_compressor(
+        &self,
+        compression_level: Compression,
+    ) -> Result<Self::Compressor, GzpError>;
+
     /// How to deflate bytes for this format. Returns deflated bytes.
     fn encode(
         &self,
         input: &[u8],
+        encoder: &mut Self::Compressor,
         compression_level: Compression,
         dict: Option<&Bytes>,
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError>;
 
     /// Generate a generic header for the given format.
-    fn header(&self, compression_leval: Compression) -> Vec<u8>;
+    fn header(&self, compression_level: Compression) -> Vec<u8>;
 
     /// Generate a genric footer for the format.
     fn footer(&self, check: &Self::C) -> Vec<u8>;
@@ -377,11 +376,21 @@ pub trait BlockFormatSpec: FormatSpec {
     /// This exists so that the [`FormatSpec::C`] can be [`PassThroughCheck`] and not try to generate
     /// an overall check value.
     type B: Check + Send + 'static;
+    /// The type that will decompress bytes for this format
+    type Decompressor;
 
     const HEADER_SIZE: usize;
 
+    /// Create a Decompressor for this format
+    fn create_decompressor(&self) -> Self::Decompressor;
+
     /// How to a block inflate bytes for this format. Returns inflated bytes.
-    fn decode_block(&self, input: &[u8], orig_size: usize) -> Result<Vec<u8>, GzpError>;
+    fn decode_block(
+        &self,
+        decoder: &mut Self::Decompressor,
+        input: &[u8],
+        orig_size: usize,
+    ) -> Result<Vec<u8>, GzpError>;
 
     /// Check that the header is expected for this format
     fn check_header(&self, _bytes: &[u8]) -> Result<(), GzpError>;

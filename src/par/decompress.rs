@@ -1,20 +1,5 @@
 //! Parallel decompression for block type gzip formats (mgzip, bgzf)
-//!
-//! # Examples
-//!
-//! ```
-//! # #[cfg(feature = "deflate")] {
-//! use std::{env, fs::File, io::Write};
-//!
-//! use gzp::{parz::{ParZ, ParZBuilder}, deflate::Mgzip, ZWriter};
-//!
-//! let mut writer = vec![];
-//! let mut parz: ParZ<Mgzip> = ParZBuilder::new().from_writer(writer);
-//! parz.write_all(b"This is a first test line\n").unwrap();
-//! parz.write_all(b"This is a second test line\n").unwrap();
-//! parz.finish().unwrap();
-//! # }
-//! ```
+
 use std::{
     io::{self, Read},
     thread::JoinHandle,
@@ -126,10 +111,12 @@ where
             .map(|_| {
                 let rx = rx.clone();
                 std::thread::spawn(move || -> Result<(), GzpError> {
+                    let mut decompressor = format.create_decompressor();
                     while let Ok(m) = rx.recv() {
                         let check_values = format.get_footer_values(&m.buffer[..]);
                         let result = if check_values.amount != 0 {
                             format.decode_block(
+                                &mut decompressor,
                                 &m.buffer[..m.buffer.len() - 8],
                                 check_values.amount as usize,
                             )?
@@ -141,7 +128,10 @@ where
                         check.update(&result);
 
                         if check.sum() != check_values.sum {
-                            return Err(GzpError::InvalidCheck(check.sum(), check_values.sum));
+                            return Err(GzpError::InvalidCheck {
+                                found: check.sum(),
+                                expected: check_values.sum,
+                            });
                         }
                         m.oneshot
                             .send(BytesMut::from(&result[..]))

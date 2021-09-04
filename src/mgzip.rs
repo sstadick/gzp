@@ -3,18 +3,22 @@
 //! Mgzip is a multi-gzip format that adds an extra field to the header indicating how large the
 //! complete block (with header and footer) is.
 
-use std::fmt::Debug;
 use std::io;
 use std::io::Write;
 
 use byteorder::{LittleEndian, WriteBytesExt};
 use bytes::BytesMut;
-use flate2::{Compress, Compression, FlushCompress};
+use flate2::Compression;
+#[cfg(not(feature = "libdeflate"))]
+use flate2::{Compress, FlushCompress};
 
-use crate::check::{Check, Crc32};
+#[cfg(not(feature = "libdeflate"))]
+use crate::check::Check;
 use crate::{GzpError, BUFSIZE};
 
+#[cfg(feature = "libdeflate")]
 const MGZIP_HEADER_SIZE: usize = 20;
+#[cfg(feature = "libdeflate")]
 const MGZIP_FOOTER_SIZE: usize = 8;
 
 /// A synchronous implementation of Mgzip.
@@ -22,7 +26,6 @@ const MGZIP_FOOTER_SIZE: usize = 8;
 /// **NOTE** use [crate::deflate::Mgzip] for a parallel implementation.
 /// **NOTE** this uses an internal buffer already so the passed in writer almost certainly does not
 /// need to be a BufferedWriter.
-#[derive(Debug)]
 pub struct MgzipSyncWriter<W>
 where
     W: Write,
@@ -33,6 +36,11 @@ where
     blocksize: usize,
     /// The compressio level to use
     compression_level: Compression,
+    /// The compressor to reuse
+    #[cfg(feature = "libdeflate")]
+    compressor: libdeflater::Compressor,
+    #[cfg(not(feature = "libdeflate"))]
+    compressor: Compress,
     /// The inner writer
     writer: W,
 }
@@ -47,65 +55,79 @@ where
     }
 
     pub fn with_capacity(writer: W, compression_level: Compression, blocksize: usize) -> Self {
+        #[cfg(feature = "libdeflate")]
+        let compressor = libdeflater::Compressor::new(
+            libdeflater::CompressionLvl::new(compression_level.level() as i32).unwrap(),
+        );
+        #[cfg(not(feature = "libdeflate"))]
+        let compressor = Compress::new(compression_level, false);
         Self {
             buffer: BytesMut::with_capacity(BUFSIZE),
             blocksize,
             compression_level,
+            compressor,
             writer,
         }
     }
 }
 
 /// Compress a block of bytes, adding a header and footer.
+#[cfg(feature = "libdeflate")]
 #[inline]
-pub fn compress(input: &[u8], compression_level: Compression) -> Result<Vec<u8>, GzpError> {
-    #[cfg(feature = "libdeflate")]
-    {
-        // The plus 64 allows odd small sized blocks to extend up to a byte boundary
-        // let mut buffer = Vec::with_capacity(input.len() + 64);
-        let mut buffer = vec![0; MGZIP_HEADER_SIZE + input.len() + 64 + MGZIP_FOOTER_SIZE];
-        let mut encoder = libdeflater::Compressor::new(
-            libdeflater::CompressionLvl::new(compression_level.level() as i32)
-                .map_err(|e| GzpError::LibDeflaterCompressionLvl(e))?,
-        );
+pub fn compress(
+    input: &[u8],
+    encoder: &mut libdeflater::Compressor,
+    compression_level: Compression,
+) -> Result<Vec<u8>, GzpError> {
+    // The plus 64 allows odd small sized blocks to extend up to a byte boundary
+    // let mut buffer = Vec::with_capacity(input.len() + 64);
+    let mut buffer = vec![0; MGZIP_HEADER_SIZE + input.len() + 64 + MGZIP_FOOTER_SIZE];
+    // let mut encoder = libdeflater::Compressor::new(
+    //     libdeflater::CompressionLvl::new(compression_level.level() as i32)
+    //         .map_err(|e| GzpError::LibDeflaterCompressionLvl(e))?,
+    // );
 
-        let bytes_written = encoder
-            .deflate_compress(input, &mut buffer[MGZIP_HEADER_SIZE..])
-            .map_err(|e| GzpError::LibDeflaterCompress(e))?;
+    let bytes_written = encoder
+        .deflate_compress(input, &mut buffer[MGZIP_HEADER_SIZE..])
+        .map_err(|e| GzpError::LibDeflaterCompress(e))?;
 
-        let mut check = libdeflater::Crc::new();
-        check.update(&input);
+    let mut check = libdeflater::Crc::new();
+    check.update(&input);
 
-        // Add header with total byte sizes
-        let mut header = header_inner(compression_level, bytes_written as u32);
-        buffer[0..MGZIP_HEADER_SIZE].copy_from_slice(&header);
-        buffer.truncate(MGZIP_HEADER_SIZE + bytes_written);
+    // Add header with total byte sizes
+    let header = header_inner(compression_level, bytes_written as u32);
+    buffer[0..MGZIP_HEADER_SIZE].copy_from_slice(&header);
+    buffer.truncate(MGZIP_HEADER_SIZE + bytes_written);
 
-        // let mut footer = Vec::with_capacity(8);
-        buffer.write_u32::<LittleEndian>(check.sum())?;
-        buffer.write_u32::<LittleEndian>(input.len() as u32)?;
+    // let mut footer = Vec::with_capacity(8);
+    buffer.write_u32::<LittleEndian>(check.sum())?;
+    buffer.write_u32::<LittleEndian>(input.len() as u32)?;
 
-        Ok(buffer)
-    }
-    #[cfg(not(feature = "libdeflate"))]
-    {
-        // The plus 64 allows odd small sized blocks to extend up to a byte boundary
-        let mut buffer = Vec::with_capacity(input.len() + 64);
-        let mut encoder = Compress::new(compression_level, false);
+    Ok(buffer)
+}
 
-        encoder.compress_vec(input, &mut buffer, FlushCompress::Finish)?;
+#[cfg(not(feature = "libdeflate"))]
+#[inline]
+pub fn compress(
+    input: &[u8],
+    encoder: &mut Compress,
+    compression_level: Compression,
+) -> Result<Vec<u8>, GzpError> {
+    // The plus 64 allows odd small sized blocks to extend up to a byte boundary
+    let mut buffer = Vec::with_capacity(input.len() + 64);
+    // let mut encoder = Compress::new(compression_level, false);
 
-        let mut check = Crc32::new();
-        check.update(input);
+    encoder.compress_vec(input, &mut buffer, FlushCompress::Finish)?;
 
-        // Add header with total byte sizes
-        let mut header = header_inner(compression_level, buffer.len() as u32);
-        let footer = footer_inner(&check);
-        header.extend(buffer.into_iter().chain(footer));
+    let mut check = crate::check::Crc32::new();
+    check.update(input);
 
-        // Add byte footer
-        Ok(header)
-    }
+    // Add header with total byte sizes
+    let mut header = header_inner(compression_level, buffer.len() as u32);
+    let footer = footer_inner(&check);
+    header.extend(buffer.into_iter().chain(footer));
+    encoder.reset();
+    Ok(header)
 }
 
 /// Create an mgzip style header
@@ -142,8 +164,9 @@ fn header_inner(compression_level: Compression, compressed_size: u32) -> Vec<u8>
 }
 
 /// Create an mgzip style footer
+#[cfg(not(feature = "libdeflate"))]
 #[inline]
-fn footer_inner(check: &Crc32) -> Vec<u8> {
+fn footer_inner(check: &crate::check::Crc32) -> Vec<u8> {
     let mut footer = Vec::with_capacity(8);
     footer.write_u32::<LittleEndian>(check.sum()).unwrap();
     footer.write_u32::<LittleEndian>(check.amount()).unwrap();
@@ -159,7 +182,7 @@ where
         self.buffer.extend_from_slice(buf);
         if self.buffer.len() >= self.blocksize {
             let b = self.buffer.split_to(self.blocksize).freeze();
-            let compressed = compress(&b[..], self.compression_level)
+            let compressed = compress(&b[..], &mut self.compressor, self.compression_level)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
             self.writer.write_all(&compressed)?;
         }
@@ -170,7 +193,7 @@ where
     fn flush(&mut self) -> std::io::Result<()> {
         let b = self.buffer.split_to(self.buffer.len()).freeze();
         if !b.is_empty() {
-            let compressed = compress(&b[..], self.compression_level)
+            let compressed = compress(&b[..], &mut self.compressor, self.compression_level)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
             self.writer.write_all(&compressed)?;
         }

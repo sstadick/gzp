@@ -6,10 +6,10 @@
 //! # #[cfg(feature = "deflate")] {
 //! use std::{env, fs::File, io::Write};
 //!
-//! use gzp::{parz::{ParZ, ParZBuilder}, deflate::Gzip, ZWriter};
+//! use gzp::{par::compress::{ParCompress, ParCompressBuilder}, deflate::Gzip, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParZ<Gzip> = ParZBuilder::new().from_writer(writer);
+//! let mut parz: ParCompress<Gzip> = ParCompressBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
@@ -25,7 +25,7 @@ pub use flate2::Compression;
 use flume::{bounded, Receiver, Sender};
 
 use crate::check::Check;
-use crate::{CompressResult, FormatSpec, GzpError, Message, ZWriter, BUFSIZE, DICT_SIZE};
+use crate::{CompressResult, FormatSpec, GzpError, Message, ZWriter, DICT_SIZE};
 
 /// The [`ParZ`] builder.
 #[derive(Debug)]
@@ -170,10 +170,12 @@ where
             .map(|_| {
                 let rx = rx.clone();
                 std::thread::spawn(move || -> Result<(), GzpError> {
+                    let mut compressor = format.create_compressor(compression_level)?;
                     while let Ok(m) = rx.recv() {
                         let chunk = &m.buffer;
                         let buffer = format.encode(
                             chunk,
+                            &mut compressor,
                             compression_level,
                             m.dictionary.as_ref(),
                             m.is_last,

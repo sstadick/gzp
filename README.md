@@ -6,7 +6,7 @@
   <a href="https://crates.io/crates/gzp"><img src="https://img.shields.io/crates/v/gzp.svg?colorB=319e8c" alt="Version info"></a><br>
 </p>
 
-Multithreaded encoding.
+Multi-threaded encoding and decoding.
 
 ## Why?
 
@@ -14,17 +14,21 @@ This crate provides a near drop in replacement for `Write` that has will compres
 to an underlying writer in the same order that the bytes were handed to the writer. This allows for much faster
 compression of data.
 
+Additionally, this provides multi-threaded decompressors for Mgzip and BGZF formats.
+
 ### Supported Encodings:
 
 - Gzip via [flate2](https://docs.rs/flate2/)
 - Zlib via [flate2](https://docs.rs/flate2/)
 - Raw Deflate via [flate2](https://docs.rs/flate2/)
 - Snappy via [rust-snappy](https://docs.rs/snap)
+- [BGZF](https://samtools.github.io/hts-specs/SAMv1.pdf) block compression format limited to 64 Kb blocks
+- [Mgzip](https://pypi.org/project/mgzip/) block compression format with no block size limit
 
 ## Usage / Features
 
-By default `pgz` has the `deflate_default` feature enabled which brings in the best performing `zlib` inplementation as
-the backend for `flate2`.
+By default `gzp` has the `deflate_default` and `libdeflate` features enabled which brings in the best performing `zlib`
+implementation as the backend for `flate2` as well as `libdeflater` for the block gzip formats.
 
 ### Examples
 
@@ -58,14 +62,16 @@ use std::{env, fs::File, io::Write};
 
 use gzp::{deflate::Gzip, ZBuilder, ZWriter};
 
-let mut writer = vec![];
-// ZBuilder will return a trait object that transparent over `ParZ` or `SyncZ`
-let mut parz = ZBuilder::<Gzip, _>::new()
-    .num_threads(0)
-    .from_writer(writer);
-parz.write_all(b"This is a first test line\n").unwrap();
-parz.write_all(b"This is a second test line\n").unwrap();
-parz.finish().unwrap();
+fn main() {
+    let mut writer = vec![];
+    // ZBuilder will return a trait object that transparent over `ParZ` or `SyncZ`
+    let mut parz = ZBuilder::<Gzip, _>::new()
+        .num_threads(0)
+        .from_writer(writer);
+    parz.write_all(b"This is a first test line\n").unwrap();
+    parz.write_all(b"This is a second test line\n").unwrap();
+    parz.finish().unwrap();
+}
 ```
 
 An updated version of [pgz](https://github.com/vorner/pgz).
@@ -73,8 +79,8 @@ An updated version of [pgz](https://github.com/vorner/pgz).
 ```rust
 use gzp::{
     ZWriter,
-    deflate::Gzip,
-    parz::{ParZ, ParZBuilder}
+    deflate::Mgzip,
+    par::{compress::{ParCompress, ParCompressBuilder}}
 };
 use std::io::{Read, Write};
 
@@ -82,7 +88,7 @@ fn main() {
     let chunksize = 64 * (1 << 10) * 2;
 
     let stdout = std::io::stdout();
-    let mut writer: ParZ<Gzip> = ParZBuilder::new().from_writer(stdout);
+    let mut writer: ParCompress<Mgzip> = ParCompressBuilder::new().from_writer(stdout);
 
     let stdin = std::io::stdin();
     let mut stdin = stdin.lock();
@@ -148,10 +154,9 @@ Note that tests will take 30-60s.
 
 ## Future todos
 
--
 - Pull in an adler crate to replace zlib impl (need one that can combine values, probably implement COMB from pigz).
 - Add more metadata to the headers
-- Add a BGZF mode + tabix index generation (or create that as its own crate)
+- Return an auto-generated index for BGZF / Mgzip formats
 - Try with https://docs.rs/lzzzz/0.8.0/lzzzz/lz4_hc/fn.compress.html
 
 ## Benchmarks
@@ -159,7 +164,7 @@ Note that tests will take 30-60s.
 All benchmarks were run on the file in `./bench-data/shakespeare.txt` catted together 100 times which creates a rough
 550Mb file.
 
-The primary benchmark takeaway is that with 2 threads `pgz` is about as fast as single threaded. With 4 threads is 2-3x
+The primary benchmark takeaway is that with 2 threads `gzp` is about as fast as single threaded. With 4 threads is 2-3x
 faster than single threaded and improves from there. It is recommended to use at least 4 threads.
 
 ![benchmarks](./violin.svg)
