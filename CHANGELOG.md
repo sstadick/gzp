@@ -1,3 +1,13 @@
+# v0.8.1
+
+- Allow buffer size to be configured on `ZBuilder`
+- Add `maybe_*` methods to `DecompressBuilder` to transparently support single threaded decompression
+- Fix panic on drop for decompressor when an error occurs elsewhere in program
+- Fix panic on drop for compressor when an error occurs elsewhere in program
+
+See [crabz issue](https://github.com/sstadick/crabz/issues/7)
+and [PR]()
+
 # v0.8.0
 
 - Adds support for Mgzip and BGZF compression and decompression
