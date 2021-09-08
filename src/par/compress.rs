@@ -27,13 +27,13 @@ use flume::{bounded, Receiver, Sender};
 use crate::check::Check;
 use crate::{CompressResult, FormatSpec, GzpError, Message, ZWriter, DICT_SIZE};
 
-/// The [`ParZ`] builder.
+/// The [`ParCompress`] builder.
 #[derive(Debug)]
 pub struct ParCompressBuilder<F>
 where
     F: FormatSpec,
 {
-    /// The buffersize accumulate before trying to compress it. Defaults to [`BUFSIZE`].
+    /// The buffersize accumulate before trying to compress it. Defaults to `F::DEFAULT_BUFSIZE`.
     buffer_size: usize,
     /// The number of threads to use for compression. Defaults to all available threads.
     num_threads: usize,
@@ -47,7 +47,7 @@ impl<F> ParCompressBuilder<F>
 where
     F: FormatSpec,
 {
-    /// Create a new [`ParZBuilder`] object.
+    /// Create a new [`ParCompressBuilder`] object.
     pub fn new() -> Self {
         Self {
             buffer_size: F::DEFAULT_BUFSIZE,
@@ -57,7 +57,7 @@ where
         }
     }
 
-    /// Set the [`buffer_size`](ParZBuilder.buffer_size). Must be >= [`DICT_SIZE`].
+    /// Set the [`buffer_size`](ParCompressBuilder.buffer_size). Must be >= [`DICT_SIZE`].
     ///
     /// # Errors
     /// - [`GzpError::BufferSize`] error if selected buffer size is less than [`DICT_SIZE`].
@@ -69,11 +69,11 @@ where
         Ok(self)
     }
 
-    /// Set the [`num_threads`](ParZBuilder.num_threads) that will be used for compression.
+    /// Set the [`num_threads`](ParCompressBuilder.num_threads) that will be used for compression.
     ///
     /// Note that one additional thread will be used for writing. Threads equal to `num_threads`
     /// will be spun up in the background and will remain blocking and waiting for blocks to compress
-    /// until ['finish`](ParZ.finish) is called.
+    /// until ['finish`](ParCompress.finish) is called.
     ///
     /// # Errors
     /// - [`GzpError::NumThreads`] error if 0 threads selected.
@@ -85,13 +85,13 @@ where
         Ok(self)
     }
 
-    /// Set the [`compression_level`](ParZBuilder.compression_level).
+    /// Set the [`compression_level`](ParCompressBuilder.compression_level).
     pub fn compression_level(mut self, compression_level: Compression) -> Self {
         self.compression_level = compression_level;
         self
     }
 
-    /// Create a configured [`ParZ`] object.
+    /// Create a configured [`ParCompress`] object.
     pub fn from_writer<W: Write + Send + 'static>(self, writer: W) -> ParCompress<F> {
         let (tx_compressor, rx_compressor) = bounded(self.num_threads * 2);
         let (tx_writer, rx_writer) = bounded(self.num_threads * 2);
@@ -147,7 +147,7 @@ impl<F> ParCompress<F>
 where
     F: FormatSpec,
 {
-    /// Create a builder to configure the [`ParZ`] runtime.
+    /// Create a builder to configure the [`ParCompress`] runtime.
     pub fn builder() -> ParCompressBuilder<F> {
         ParCompressBuilder::new()
     }
@@ -254,7 +254,7 @@ where
 {
     /// Flush the buffers and wait on all threads to finish working.
     ///
-    /// This *MUST* be called before the [`ParZ`] object goes out of scope.
+    /// This *MUST* be called before the [`ParCompress`] object goes out of scope.
     ///
     /// # Errors
     /// - [`GzpError`] if there is an issue flushing the last blocks or an issue joining on the writer thread

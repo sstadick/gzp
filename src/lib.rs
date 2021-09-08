@@ -8,6 +8,8 @@
 //!
 //! - Gzip
 //! - Zlib
+//! - BGZF
+//! - Mgzip
 //! - Raw Deflate
 //! - Snap Frame Encoding
 //!
@@ -373,7 +375,7 @@ pub struct FooterValues {
 
 pub trait BlockFormatSpec: FormatSpec {
     /// The Check type for this format for an individual block.
-    /// This exists so that the [`FormatSpec::C`] can be [`PassThroughCheck`] and not try to generate
+    /// This exists so that the [`FormatSpec::C`] can be [`check::PassThroughCheck`] and not try to generate
     /// an overall check value.
     type B: Check + Send + 'static;
     /// The type that will decompress bytes for this format
