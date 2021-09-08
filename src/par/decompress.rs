@@ -6,6 +6,7 @@ use std::{
 };
 
 use bytes::{BufMut, Bytes, BytesMut};
+use flate2::read::MultiGzDecoder;
 pub use flate2::Compression;
 use flume::{bounded, unbounded, Receiver, Sender};
 
@@ -41,6 +42,7 @@ where
         Ok(self)
     }
 
+    /// Set the number of threads and verify that that they are > 0 ensuring the mulit-threaded decompression will be attempted.
     pub fn num_threads(mut self, num_threads: usize) -> Result<Self, GzpError> {
         if num_threads == 0 {
             return Err(GzpError::NumThreads(num_threads));
@@ -49,6 +51,7 @@ where
         Ok(self)
     }
 
+    /// Build a guaranteed multi-threaded decompressor
     pub fn from_reader<R: Read + Send + 'static>(self, reader: R) -> ParDecompress<F> {
         let (tx_reader, rx_reader) = bounded(self.num_threads * 2);
         let buffer_size = self.buffer_size;
@@ -62,6 +65,21 @@ where
             buffer: BytesMut::new(),
             buffer_size,
             format,
+        }
+    }
+
+    /// Set the number of threads and allow 0 threads.
+    pub fn maybe_num_threads(mut self, num_threads: usize) -> Self {
+        self.num_threads = num_threads;
+        self
+    }
+
+    /// If `num_threads` is 0, this returns a single-threaded decompressor
+    pub fn maybe_par_from_reader<R: Read + Send + 'static>(self, reader: R) -> Box<dyn Read> {
+        if self.num_threads == 0 {
+            Box::new(MultiGzDecoder::new(reader))
+        } else {
+            Box::new(self.from_reader(reader))
         }
     }
 }
@@ -155,8 +173,8 @@ where
                 reader.read_exact(&mut remainder)?;
                 let (m, r) = DMessage::new_parts(Bytes::from(remainder));
 
-                tx_reader.send(r).unwrap();
-                tx.send(m).unwrap();
+                tx_reader.send(r).map_err(|_e| GzpError::ChannelSend)?;
+                tx.send(m).map_err(|_e| GzpError::ChannelSend)?;
             } else {
                 break; // EOF
             }
@@ -294,7 +312,11 @@ where
 {
     fn drop(&mut self) {
         if self.rx_reader.is_some() {
-            self.finish().unwrap();
+            match self.finish() {
+                // ChannelSend errors are acceptable since we just dropped the receiver to cause the shutdown
+                Ok(()) | Err(GzpError::ChannelSend) => (),
+                Err(err) => std::panic::resume_unwind(Box::new(err)),
+            }
         }
     }
 }

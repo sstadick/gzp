@@ -176,6 +176,7 @@ where
 {
     num_threads: usize,
     compression_level: Compression,
+    buffer_size: usize,
     writer: PhantomData<W>,
     format: PhantomData<F>,
 }
@@ -189,6 +190,7 @@ where
         Self {
             num_threads: num_cpus::get(),
             compression_level: Compression::new(3),
+            buffer_size: F::DEFAULT_BUFSIZE,
             writer: PhantomData,
             format: PhantomData,
         }
@@ -205,6 +207,14 @@ where
         self
     }
 
+    /// Buffer size to use (the effect of this may vary depending on `F`),
+    /// check the documentation on the `F` type you are creating to see if
+    /// there are restrictions on the buffer size.
+    pub fn buffer_size(mut self, buffer_size: usize) -> Self {
+        self.buffer_size = buffer_size;
+        self
+    }
+
     /// Create a [`ZWriter`] trait object from a writer.
     #[allow(clippy::missing_panics_doc)]
     pub fn from_writer(self, writer: W) -> Box<dyn ZWriter>
@@ -216,6 +226,8 @@ where
                 ParCompressBuilder::<F>::new()
                     .compression_level(self.compression_level)
                     .num_threads(self.num_threads)
+                    .unwrap()
+                    .buffer_size(self.buffer_size)
                     .unwrap()
                     .from_writer(writer),
             )

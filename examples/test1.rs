@@ -1,10 +1,9 @@
 #[cfg(feature = "deflate")]
 mod example {
-    use std::{env, fs::File, io::Write};
-
     use gzp::deflate::Gzip;
     use gzp::par::compress::{ParCompress, ParCompressBuilder};
     use gzp::ZWriter;
+    use std::{env, fs::File, io::Write};
 
     pub fn main() {
         let file = env::args().skip(1).next().unwrap();
