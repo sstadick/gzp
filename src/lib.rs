@@ -205,7 +205,9 @@ where
         self
     }
 
-    /// Buffer size to use (the effect of this may vary depending on `F`)
+    /// Buffer size to use (the effect of this may vary depending on `F`),
+    /// check the documentation on the `F` type you are creating to see if
+    /// there are restrictions on the buffer size.
     pub fn buffer_size(mut self, buffer_size: usize) -> Self {
         self.buffer_size = buffer_size;
         self
