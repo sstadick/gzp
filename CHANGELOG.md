@@ -6,7 +6,7 @@
 - Fix panic on drop for compressor when an error occurs elsewhere in program
 
 See [crabz issue](https://github.com/sstadick/crabz/issues/7)
-and [PR]()
+and [PR](https://github.com/sstadick/gzp/pull/16)
 
 # v0.8.0
 
