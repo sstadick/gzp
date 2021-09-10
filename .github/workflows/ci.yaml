@@ -80,7 +80,7 @@ jobs:
         uses: Swatinem/rust-cache@v1
 
       - name: i686 test
-        if: ${{ matrix.os }} == 'windows-latest'
+        if:  matrix.os == 'windows-latest'
         run: |
                 rustup target add i686-windows-msvc
                 cago test --verbose --all-features --target i686-windows-msvc
