@@ -64,7 +64,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ ubuntu-latest, macOS-latest, windows-latest, i686-pc-windows-msvc ]
+        os: [ ubuntu-latest, macOS-latest, windows-latest ]
     steps:
       - name: Checkout sources
         uses: actions/checkout@v2
@@ -78,6 +78,13 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v1
+
+      - name: i686 test
+        run: |
+                if [ ${{ matrix.os }} = "windows-latest" ]; then
+                        rustup target add i686-windows-msvc
+                        cago test --verbose --all-features --target i686-windows-msvc
+                fi
 
       - name: Run tests small
         run: cargo test --verbose --all-features
