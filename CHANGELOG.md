@@ -1,3 +1,7 @@
+# v0.8.2
+
+- Fix [crabz issue 9](https://github.com/sstadick/crabz/issues/9) which is that when 0 or 1 threads are used to compress block formats a `GzEncoder` was used instead of the correspoding single-threaded block encoder.
+
 # v0.8.1
 
 - Allow buffer size to be configured on `ZBuilder`
