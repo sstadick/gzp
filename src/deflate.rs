@@ -480,10 +480,10 @@ impl<W> SyncWriter<W> for Mgzip
 where
     W: Write,
 {
-    type OutputWriter = GzEncoder<W>;
+    type OutputWriter = MgzipSyncWriter<W>;
 
-    fn sync_writer(writer: W, compression_level: Compression) -> GzEncoder<W> {
-        GzEncoder::new(writer, compression_level)
+    fn sync_writer(writer: W, compression_level: Compression) -> Self::OutputWriter {
+        MgzipSyncWriter::new(writer, compression_level)
     }
 }
 
@@ -635,10 +635,11 @@ impl<W> SyncWriter<W> for Bgzf
 where
     W: Write,
 {
-    type OutputWriter = GzEncoder<W>;
+    // type OutputWriter = GzEncoder<W>;
+    type OutputWriter = BgzfSyncWriter<W>;
 
-    fn sync_writer(writer: W, compression_level: Compression) -> GzEncoder<W> {
-        GzEncoder::new(writer, compression_level)
+    fn sync_writer(writer: W, compression_level: Compression) -> Self::OutputWriter {
+        BgzfSyncWriter::new(writer, compression_level)
     }
 }
 
