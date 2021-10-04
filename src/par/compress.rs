@@ -166,10 +166,13 @@ where
     where
         W: Write + Send + 'static,
     {
+        let core_ids = core_affinity::get_core_ids().unwrap();
         let handles: Vec<JoinHandle<Result<(), GzpError>>> = (0..num_threads)
-            .map(|_| {
+            .zip(core_ids.into_iter())
+            .map(|(_, id)| {
                 let rx = rx.clone();
                 std::thread::spawn(move || -> Result<(), GzpError> {
+                    core_affinity::set_for_current(id);
                     let mut compressor = format.create_compressor(compression_level)?;
                     while let Ok(m) = rx.recv() {
                         let chunk = &m.buffer;

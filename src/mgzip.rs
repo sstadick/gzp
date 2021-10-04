@@ -21,6 +21,13 @@ const MGZIP_HEADER_SIZE: usize = 20;
 #[cfg(feature = "libdeflate")]
 const MGZIP_FOOTER_SIZE: usize = 8;
 
+const EXTRA: f64 = 0.1;
+
+#[inline]
+fn extra_amount(input_len: usize) -> usize {
+    std::cmp::max(128, (input_len as f64 * EXTRA) as usize)
+}
+
 /// A synchronous implementation of Mgzip.
 ///
 /// **NOTE** use [crate::deflate::Mgzip] for a parallel implementation.
@@ -81,7 +88,8 @@ pub fn compress(
 ) -> Result<Vec<u8>, GzpError> {
     // The plus 64 allows odd small sized blocks to extend up to a byte boundary
     // let mut buffer = Vec::with_capacity(input.len() + 64);
-    let mut buffer = vec![0; MGZIP_HEADER_SIZE + input.len() + 64 + MGZIP_FOOTER_SIZE];
+    let mut buffer =
+        vec![0; MGZIP_HEADER_SIZE + input.len() + extra_amount(input.len()) + MGZIP_FOOTER_SIZE];
     // let mut encoder = libdeflater::Compressor::new(
     //     libdeflater::CompressionLvl::new(compression_level.level() as i32)
     //         .map_err(|e| GzpError::LibDeflaterCompressionLvl(e))?,
@@ -114,7 +122,7 @@ pub fn compress(
     compression_level: Compression,
 ) -> Result<Vec<u8>, GzpError> {
     // The plus 64 allows odd small sized blocks to extend up to a byte boundary
-    let mut buffer = Vec::with_capacity(input.len() + 64);
+    let mut buffer = Vec::with_capacity(input.len() + extra_amount(input.len()));
     // let mut encoder = Compress::new(compression_level, false);
 
     encoder.compress_vec(input, &mut buffer, FlushCompress::Finish)?;

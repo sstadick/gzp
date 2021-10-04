@@ -125,9 +125,12 @@ where
     {
         let (tx, rx): (Sender<DMessage>, Receiver<DMessage>) = bounded(num_threads * 2);
 
+        let core_ids = core_affinity::get_core_ids().unwrap();
         let handles: Vec<JoinHandle<Result<(), GzpError>>> = (0..num_threads)
-            .map(|_| {
+            .zip(core_ids.into_iter())
+            .map(|(_, id)| {
                 let rx = rx.clone();
+                core_affinity::set_for_current(id);
                 std::thread::spawn(move || -> Result<(), GzpError> {
                     let mut decompressor = format.create_decompressor();
                     while let Ok(m) = rx.recv() {

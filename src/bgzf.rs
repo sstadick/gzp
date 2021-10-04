@@ -40,6 +40,13 @@ pub(crate) const BGZF_HEADER_SIZE: usize = 18;
 #[cfg(feature = "libdeflate")]
 pub(crate) const BGZF_FOOTER_SIZE: usize = 8;
 
+const EXTRA: f64 = 0.1;
+
+#[inline]
+fn extra_amount(input_len: usize) -> usize {
+    std::cmp::max(128, (input_len as f64 * EXTRA) as usize)
+}
+
 /// A synchronous implementation of Bgzf.
 ///
 /// **NOTE** use [crate::deflate::Bgzf] for a parallel implementation.
@@ -101,7 +108,8 @@ pub fn compress(
 ) -> Result<Vec<u8>, GzpError> {
     // The plus 64 allows odd small sized blocks to extend up to a byte boundary
     // let mut buffer = Vec::with_capacity(input.len() + 64);
-    let mut buffer = vec![0; BGZF_HEADER_SIZE + input.len() + 64 + BGZF_FOOTER_SIZE];
+    let mut buffer =
+        vec![0; BGZF_HEADER_SIZE + input.len() + extra_amount(input.len()) + BGZF_FOOTER_SIZE];
     // let mut encoder = libdeflater::Compressor::new(
     //     libdeflater::CompressionLvl::new(compression_level.level() as i32)
     //         .map_err(|e| GzpError::LibDeflaterCompressionLvl(e))?,
@@ -140,7 +148,7 @@ pub fn compress(
 ) -> Result<Vec<u8>, GzpError> {
     {
         // The plus 64 allows odd small sized blocks to extend up to a byte boundary
-        let mut buffer = Vec::with_capacity(input.len() + 64);
+        let mut buffer = Vec::with_capacity(input.len() + extra_amount(input.len()));
         // let mut encoder = Compress::new(compression_level, false);
         encoder.compress_vec(input, &mut buffer, FlushCompress::Finish)?;
 

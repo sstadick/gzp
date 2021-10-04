@@ -70,6 +70,7 @@
 //! parz.finish().unwrap();
 //! # }
 //! ```
+#![allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
 use std::fmt::Debug;
 use std::io::{self, Write};
 use std::marker::PhantomData;
