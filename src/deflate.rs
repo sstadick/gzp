@@ -671,7 +671,7 @@ mod test {
     use proptest::prelude::*;
     use tempfile::tempdir;
 
-    use crate::bgzf::BGZF_BLOCK_SIZE;
+    use crate::bgzf::{BgzfSyncReader, BGZF_BLOCK_SIZE};
     use crate::par::compress::{ParCompress, ParCompressBuilder};
     use crate::par::decompress::ParDecompressBuilder;
     use crate::syncz::SyncZBuilder;
@@ -1189,7 +1189,7 @@ mod test {
             reader.read_to_end(&mut result).unwrap();
 
             // Decompress it
-            let mut gz = MultiGzDecoder::new(&result[..]);
+            let mut gz = BgzfSyncReader::new(&result[..]);
             let mut bytes = vec![];
             gz.read_to_end(&mut bytes).unwrap();
 
@@ -1200,9 +1200,10 @@ mod test {
         #[test]
         #[ignore]
         fn test_all_bgzf_decompress(
-            input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)), // (DICT_SIZE * 10)),
+            input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)),
             buf_size in DICT_SIZE..BGZF_BLOCK_SIZE,
-            num_threads in 1..num_cpus::get(),
+            num_threads in 0..num_cpus::get(),
+            num_threads_decomp in 0..num_cpus::get(),
             write_size in 1000..1001_usize,
             comp_level in 1..9_u32
         ) {
@@ -1214,9 +1215,9 @@ mod test {
 
 
             // Compress input to output
-            let mut par_gz = ParCompressBuilder::<Bgzf>::new()
-                    .buffer_size(buf_size).unwrap()
-                    .num_threads(num_threads).unwrap()
+            let mut par_gz = ZBuilder::<Bgzf, _>::new()
+                    .buffer_size(buf_size)
+                    .num_threads(num_threads)
                     .compression_level(Compression::new(comp_level))
                     .from_writer(out_writer);
 
@@ -1227,7 +1228,11 @@ mod test {
 
             // Read output back in
             let reader = BufReader::new(File::open(output_file).unwrap());
-            let mut reader = ParDecompressBuilder::<Bgzf>::new().num_threads(num_threads).unwrap().from_reader(reader);
+            let mut reader: Box<dyn Read> = if num_threads_decomp > 0 {
+                Box::new(ParDecompressBuilder::<Bgzf>::new().num_threads(num_threads_decomp).unwrap().from_reader(reader))
+            } else {
+                Box::new(BgzfSyncReader::new(reader))
+            };
             let mut result = vec![];
             reader.read_to_end(&mut result).unwrap();
 

@@ -87,7 +87,7 @@ use crate::check::Check;
 use crate::par::compress::ParCompressBuilder;
 use crate::syncz::{SyncZ, SyncZBuilder};
 
-mod bgzf;
+pub mod bgzf;
 pub mod check;
 #[cfg(feature = "deflate")]
 pub mod deflate;
@@ -162,7 +162,7 @@ pub trait ZWriter: Write {
 }
 
 /// Create a synchronous writer wrapping the input `W` type.
-pub trait SyncWriter<W: Write> {
+pub trait SyncWriter<W: Write>: Send {
     // type InputWriter: Write;
     type OutputWriter: Write;
 
@@ -176,6 +176,7 @@ where
     W: Write + Send + 'static,
 {
     num_threads: usize,
+    pin_threads: Option<usize>,
     compression_level: Compression,
     buffer_size: usize,
     writer: PhantomData<W>,
@@ -190,6 +191,7 @@ where
     pub fn new() -> Self {
         Self {
             num_threads: num_cpus::get(),
+            pin_threads: None,
             compression_level: Compression::new(3),
             buffer_size: F::DEFAULT_BUFSIZE,
             writer: PhantomData,
@@ -208,6 +210,12 @@ where
         self
     }
 
+    /// Whether or not to pin compression threads and which physical CPU to start pinning at.
+    pub fn pin_threads(mut self, pin_threads: Option<usize>) -> Self {
+        self.pin_threads = pin_threads;
+        self
+    }
+
     /// Buffer size to use (the effect of this may vary depending on `F`),
     /// check the documentation on the `F` type you are creating to see if
     /// there are restrictions on the buffer size.
@@ -220,7 +228,7 @@ where
     #[allow(clippy::missing_panics_doc)]
     pub fn from_writer(self, writer: W) -> Box<dyn ZWriter>
     where
-        SyncZ<<F as SyncWriter<W>>::OutputWriter>: ZWriter,
+        SyncZ<<F as SyncWriter<W>>::OutputWriter>: ZWriter + Send,
     {
         if self.num_threads > 1 {
             Box::new(
@@ -230,6 +238,7 @@ where
                     .unwrap()
                     .buffer_size(self.buffer_size)
                     .unwrap()
+                    .pin_threads(self.pin_threads)
                     .from_writer(writer),
             )
         } else {

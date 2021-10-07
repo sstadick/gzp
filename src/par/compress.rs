@@ -41,6 +41,8 @@ where
     compression_level: Compression,
     /// The out file format to use.
     format: F,
+    /// Whether or not to pin threads to specific cpus and what core to start pins at
+    pin_threads: Option<usize>,
 }
 
 impl<F> ParCompressBuilder<F>
@@ -54,6 +56,7 @@ where
             num_threads: num_cpus::get(),
             compression_level: Compression::new(3),
             format: F::new(),
+            pin_threads: None,
         }
     }
 
@@ -91,12 +94,19 @@ where
         self
     }
 
+    /// Set the [`pin_threads`](ParCompressBuilder.pin_threads).
+    pub fn pin_threads(mut self, pin_threads: Option<usize>) -> Self {
+        self.pin_threads = pin_threads;
+        self
+    }
+
     /// Create a configured [`ParCompress`] object.
     pub fn from_writer<W: Write + Send + 'static>(self, writer: W) -> ParCompress<F> {
         let (tx_compressor, rx_compressor) = bounded(self.num_threads * 2);
         let (tx_writer, rx_writer) = bounded(self.num_threads * 2);
         let buffer_size = self.buffer_size;
         let comp_level = self.compression_level;
+        let pin_threads = self.pin_threads.clone();
         let format = self.format;
         let handle = std::thread::spawn(move || {
             ParCompress::run(
@@ -106,6 +116,7 @@ where
                 self.num_threads,
                 comp_level,
                 format,
+                pin_threads,
             )
         });
         ParCompress {
@@ -162,17 +173,23 @@ where
         num_threads: usize,
         compression_level: Compression,
         format: F,
+        pin_threads: Option<usize>,
     ) -> Result<(), GzpError>
     where
         W: Write + Send + 'static,
     {
         let core_ids = core_affinity::get_core_ids().unwrap();
         let handles: Vec<JoinHandle<Result<(), GzpError>>> = (0..num_threads)
-            .zip(core_ids.into_iter())
-            .map(|(_, id)| {
+            .map(|i| {
                 let rx = rx.clone();
+                let core_ids = core_ids.clone();
                 std::thread::spawn(move || -> Result<(), GzpError> {
-                    core_affinity::set_for_current(id);
+                    if let Some(pin_at) = pin_threads {
+                        if let Some(id) = core_ids.get(pin_at + i) {
+                            core_affinity::set_for_current(*id);
+                        }
+                    }
+
                     let mut compressor = format.create_compressor(compression_level)?;
                     while let Ok(m) = rx.recv() {
                         let chunk = &m.buffer;

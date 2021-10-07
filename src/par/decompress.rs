@@ -20,6 +20,7 @@ where
     buffer_size: usize,
     num_threads: usize,
     format: F,
+    pin_threads: Option<usize>,
 }
 
 impl<F> ParDecompressBuilder<F>
@@ -31,6 +32,7 @@ where
             buffer_size: BUFSIZE,
             num_threads: num_cpus::get(),
             format: F::new(),
+            pin_threads: None,
         }
     }
 
@@ -51,13 +53,20 @@ where
         Ok(self)
     }
 
+    /// Set the [`pin_threads`](ParDecompressBuilder.pin_threads).
+    pub fn pin_threads(mut self, pin_threads: Option<usize>) -> Self {
+        self.pin_threads = pin_threads;
+        self
+    }
+
     /// Build a guaranteed multi-threaded decompressor
     pub fn from_reader<R: Read + Send + 'static>(self, reader: R) -> ParDecompress<F> {
         let (tx_reader, rx_reader) = bounded(self.num_threads * 2);
         let buffer_size = self.buffer_size;
         let format = self.format;
+        let pin_threads = self.pin_threads.clone();
         let handle = std::thread::spawn(move || {
-            ParDecompress::run(&tx_reader, reader, self.num_threads, format)
+            ParDecompress::run(&tx_reader, reader, self.num_threads, format, pin_threads)
         });
         ParDecompress {
             handle: Some(handle),
@@ -119,6 +128,7 @@ where
         mut reader: R,
         num_threads: usize,
         format: F,
+        pin_threads: Option<usize>,
     ) -> Result<(), GzpError>
     where
         R: Read + Send + 'static,
@@ -127,11 +137,15 @@ where
 
         let core_ids = core_affinity::get_core_ids().unwrap();
         let handles: Vec<JoinHandle<Result<(), GzpError>>> = (0..num_threads)
-            .zip(core_ids.into_iter())
-            .map(|(_, id)| {
+            .map(|i| {
                 let rx = rx.clone();
-                core_affinity::set_for_current(id);
+                let core_ids = core_ids.clone();
                 std::thread::spawn(move || -> Result<(), GzpError> {
+                    if let Some(pin_at) = pin_threads {
+                        if let Some(id) = core_ids.get(pin_at + i) {
+                            core_affinity::set_for_current(*id);
+                        }
+                    }
                     let mut decompressor = format.create_decompressor();
                     while let Ok(m) = rx.recv() {
                         let check_values = format.get_footer_values(&m.buffer[..]);
