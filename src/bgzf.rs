@@ -3,18 +3,19 @@
 //! Bgzf is a multi-gzip format that adds an extra field to the header indicating how large the
 //! complete block (with header and footer) is.
 
-use std::io;
 use std::io::Write;
+use std::io::{self, Read};
 
 use byteorder::{LittleEndian, WriteBytesExt};
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut};
 use flate2::Compression;
 #[cfg(not(feature = "libdeflate"))]
 use flate2::{Compress, FlushCompress};
 
 #[cfg(not(feature = "libdeflate"))]
 use crate::check::Check;
-use crate::{GzpError, BUFSIZE};
+use crate::deflate::Bgzf;
+use crate::{BlockFormatSpec, FooterValues, GzpError, BUFSIZE};
 
 pub(crate) const BGZF_BLOCK_SIZE: usize = 65280;
 // default from bgzf, compress(BGZF_BLOCK_SIZE) < BGZF_MAX_BLOCK_SIZE
@@ -39,6 +40,49 @@ pub(crate) static BGZF_EOF: &[u8] = &[
 pub(crate) const BGZF_HEADER_SIZE: usize = 18;
 #[cfg(feature = "libdeflate")]
 pub(crate) const BGZF_FOOTER_SIZE: usize = 8;
+
+const EXTRA: f64 = 0.1;
+
+#[inline]
+fn extra_amount(input_len: usize) -> usize {
+    std::cmp::max(128, (input_len as f64 * EXTRA) as usize)
+}
+
+/// A sync implementation of a Bgzf reader
+pub struct BgzfSyncReader<R>
+where
+    R: Read,
+{
+    buffer: BytesMut,
+    compressed_buffer: BytesMut,
+    #[cfg(feature = "libdeflate")]
+    decompressor: libdeflater::Decompressor,
+    #[cfg(not(feature = "libdeflate"))]
+    decompressor: Decompress,
+    reader: R,
+    format: Bgzf,
+}
+
+impl<R> BgzfSyncReader<R>
+where
+    R: Read,
+{
+    pub fn new(reader: R) -> Self {
+        #[cfg(feature = "libdeflate")]
+        let decompressor = libdeflater::Decompressor::new();
+
+        #[cfg(not(feature = "libdeflate"))]
+        let decompressor = Decompress::new();
+
+        Self {
+            buffer: BytesMut::with_capacity(BUFSIZE),
+            compressed_buffer: BytesMut::with_capacity(BGZF_BLOCK_SIZE),
+            decompressor,
+            reader,
+            format: Bgzf {},
+        }
+    }
+}
 
 /// A synchronous implementation of Bgzf.
 ///
@@ -91,6 +135,59 @@ where
     }
 }
 
+/// Decompress a block of bytes
+#[cfg(feature = "libdeflate")]
+#[inline]
+pub fn decompress(
+    input: &[u8],
+    decoder: &mut libdeflater::Decompressor,
+    output: &mut [u8],
+    footer_vals: FooterValues,
+) -> Result<(), GzpError> {
+    if footer_vals.amount != 0 {
+        let _bytes_decompressed = decoder.deflate_decompress(&input[..input.len() - 8], output)?;
+    }
+    let mut new_check = libdeflater::Crc::new();
+    new_check.update(output);
+
+    if footer_vals.sum != new_check.sum() {
+        return Err(GzpError::InvalidCheck {
+            found: new_check.sum(),
+            expected: footer_vals.sum,
+        });
+    }
+    Ok(())
+}
+
+/// Decompress a block of bytes
+#[cfg(not(feature = "libdeflate"))]
+#[inline]
+pub fn decompress(
+    input: &[u8],
+    decoder: &mut Decompress,
+    output: &mut [u8],
+    footer_vals: FooterValues,
+) -> Result<(), GzpError> {
+    if footer_vals.amount != 0 {
+        let _bytes_decompressed = decoder.decompress(
+            &input[..input.len() - 8],
+            output,
+            flate2::FlushDecompress::Finish,
+        )?;
+        decoder.reset(false);
+    }
+    let mut new_check = libdeflater::Crc::new();
+    new_check.update(output);
+
+    if footer_vals.sum != new_check.sum() {
+        return Err(GzpError::InvalidCheck {
+            found: new_check.sum(),
+            expected: footer_vals.sum,
+        });
+    }
+    Ok(())
+}
+
 /// Compress a block of bytes, adding a header and footer.
 #[cfg(feature = "libdeflate")]
 #[inline]
@@ -101,11 +198,8 @@ pub fn compress(
 ) -> Result<Vec<u8>, GzpError> {
     // The plus 64 allows odd small sized blocks to extend up to a byte boundary
     // let mut buffer = Vec::with_capacity(input.len() + 64);
-    let mut buffer = vec![0; BGZF_HEADER_SIZE + input.len() + 64 + BGZF_FOOTER_SIZE];
-    // let mut encoder = libdeflater::Compressor::new(
-    //     libdeflater::CompressionLvl::new(compression_level.level() as i32)
-    //         .map_err(|e| GzpError::LibDeflaterCompressionLvl(e))?,
-    // );
+    let mut buffer =
+        vec![0; BGZF_HEADER_SIZE + input.len() + extra_amount(input.len()) + BGZF_FOOTER_SIZE];
 
     let bytes_written = encoder
         .deflate_compress(input, &mut buffer[BGZF_HEADER_SIZE..])
@@ -140,7 +234,7 @@ pub fn compress(
 ) -> Result<Vec<u8>, GzpError> {
     {
         // The plus 64 allows odd small sized blocks to extend up to a byte boundary
-        let mut buffer = Vec::with_capacity(input.len() + 64);
+        let mut buffer = Vec::with_capacity(input.len() + extra_amount(input.len()));
         // let mut encoder = Compress::new(compression_level, false);
         encoder.compress_vec(input, &mut buffer, FlushCompress::Finish)?;
 
@@ -241,6 +335,57 @@ where
     }
 }
 
+impl<R> Read for BgzfSyncReader<R>
+where
+    R: Read,
+{
+    #[inline]
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let mut total_read = 0;
+        loop {
+            let before = self.buffer.remaining();
+            if before > buf.len() - total_read {
+                self.buffer.copy_to_slice(&mut buf[total_read..]);
+            } else if !self.buffer.is_empty() {
+                self.buffer
+                    .copy_to_slice(&mut buf[total_read..total_read + before]);
+            }
+            let after = self.buffer.remaining();
+            total_read += before - after;
+
+            if total_read == buf.len() {
+                break;
+            } else if total_read <= buf.len() {
+                let mut header_buf = vec![0; Bgzf::HEADER_SIZE];
+                if let Ok(()) = self.reader.read_exact(&mut header_buf) {
+                    self.format.check_header(&header_buf).unwrap();
+                    let size = self.format.get_block_size(&header_buf).unwrap();
+
+                    self.compressed_buffer.clear();
+                    self.compressed_buffer.resize(size - Bgzf::HEADER_SIZE, 0);
+                    self.reader.read_exact(&mut self.compressed_buffer)?;
+
+                    let check = self.format.get_footer_values(&self.compressed_buffer);
+                    self.buffer.clear();
+                    self.buffer.resize(check.amount as usize, 0);
+
+                    decompress(
+                        &self.compressed_buffer,
+                        &mut self.decompressor,
+                        &mut self.buffer,
+                        check,
+                    )
+                    .unwrap();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        Ok(total_read)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::io::{Read, Write};
@@ -249,7 +394,6 @@ mod test {
         io::{BufReader, BufWriter},
     };
 
-    use flate2::bufread::MultiGzDecoder;
     use tempfile::tempdir;
 
     use super::*;
@@ -290,9 +434,10 @@ mod test {
         reader.read_to_end(&mut result).unwrap();
 
         // Decompress it
-        let mut gz = MultiGzDecoder::new(&result[..]);
+        let mut decoder = BgzfSyncReader::new(&result[..]);
+        // let mut gz = MultiGzDecoder::new(&result[..]);
         let mut bytes = vec![];
-        gz.read_to_end(&mut bytes).unwrap();
+        decoder.read_to_end(&mut bytes).unwrap();
 
         // Assert decompressed output is equal to input
         assert_eq!(input.to_vec(), bytes);

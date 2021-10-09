@@ -43,6 +43,15 @@ use crate::mgzip::MgzipSyncWriter;
 use crate::syncz::SyncZ;
 use crate::{bgzf, check, mgzip, BlockFormatSpec, FormatSpec, GzpError, Pair, SyncWriter, ZWriter};
 
+/// The extra amount of space to add to the compressed vec to allow for EOF and other possible extra characters
+// const EXTRA: usize = 256;
+const EXTRA: f64 = 0.1;
+
+#[inline]
+fn output_buffer_size(input_len: usize) -> usize {
+    input_len + std::cmp::max(128, (input_len as f64 * EXTRA) as usize)
+}
+
 //////////////////////////////////////////////////////////
 // GZIP
 //////////////////////////////////////////////////////////
@@ -82,22 +91,20 @@ impl FormatSpec for Gzip {
         dict: Option<&Bytes>,
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError> {
-        // The plus 16 allows odd small sized blocks to extend up to a byte boundary and end stream
-        let mut buffer = Vec::with_capacity(input.len() + 64);
+        // The plus 128 allows odd small sized blocks to extend up to a byte boundary and end stream
+        let mut buffer = Vec::with_capacity(output_buffer_size(input.len()));
+        let flush = if is_last {
+            FlushCompress::Finish
+        } else {
+            FlushCompress::Sync
+        };
         // let mut encoder = Compress::new(compression_level, false);
         #[cfg(feature = "any_zlib")]
         if let Some(dict) = dict {
             encoder.set_dictionary(&dict[..])?;
         }
-        encoder.compress_vec(
-            input,
-            &mut buffer,
-            if is_last {
-                FlushCompress::Finish
-            } else {
-                FlushCompress::Sync
-            },
-        )?;
+        encoder.compress_vec(input, &mut buffer, flush)?;
+
         encoder.reset();
         Ok(buffer)
     }
@@ -194,7 +201,7 @@ impl FormatSpec for Zlib {
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError> {
         // The plus 16 allows odd small sized blocks to extend up to a byte boundary and end stream
-        let mut buffer = Vec::with_capacity(input.len() + 64);
+        let mut buffer = Vec::with_capacity(output_buffer_size(input.len()));
         #[cfg(feature = "any_zlib")]
         if let Some(dict) = dict {
             encoder.set_dictionary(&dict[..])?;
@@ -224,7 +231,7 @@ impl FormatSpec for Zlib {
             2 << 6
         };
 
-        let mut head = (0x78 << 8) + // defalte, 32k window
+        let mut head = (0x78 << 8) + // deflate, 32k window
             comp_value; // compression level clue
         head += 31 - (head % 31); // make it multiple of 31
         let header = vec![
@@ -305,7 +312,7 @@ impl FormatSpec for RawDeflate {
         is_last: bool,
     ) -> Result<Vec<u8>, GzpError> {
         // The plus 8 allows odd small sized blocks to extend up to a byte boundary
-        let mut buffer = Vec::with_capacity(input.len() + 64);
+        let mut buffer = Vec::with_capacity(output_buffer_size(input.len()));
         // let mut encoder = Compress::new(compression_level, false);
         #[cfg(feature = "any_zlib")]
         if let Some(dict) = dict {
@@ -392,7 +399,7 @@ impl BlockFormatSpec for Mgzip {
 
         #[cfg(not(feature = "libdeflate"))]
         {
-            let mut result = Vec::with_capacity(orig_size + 64);
+            let mut result = Vec::with_capacity(orig_size);
             decoder.decompress_vec(&input, &mut result, FlushDecompress::Finish)?;
             decoder.reset(false);
             Ok(result)
@@ -664,7 +671,8 @@ mod test {
     use proptest::prelude::*;
     use tempfile::tempdir;
 
-    use crate::bgzf::BGZF_BLOCK_SIZE;
+    use crate::bgzf::{BgzfSyncReader, BGZF_BLOCK_SIZE};
+    use crate::mgzip::MgzipSyncReader;
     use crate::par::compress::{ParCompress, ParCompressBuilder};
     use crate::par::decompress::ParDecompressBuilder;
     use crate::syncz::SyncZBuilder;
@@ -1013,17 +1021,22 @@ mod test {
     proptest! {
         #[test]
         #[ignore]
-        fn test_all_gzip(
+        fn test_all_gzip_comp(
             input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)),
             buf_size in DICT_SIZE..BUFSIZE,
             num_threads in 0..num_cpus::get(),
-            write_size in 1..10_000usize,
+            write_size in 1..10_000_usize,
+            comp_level in 0..9_u32
         ) {
             let dir = tempdir().unwrap();
 
             // Create output file
             let output_file = dir.path().join("output.txt");
+            // let input_file = dir.path().join("input.txt");
             let out_writer = BufWriter::new(File::create(&output_file).unwrap());
+            // let mut in_writer = BufWriter::new(File::create(&input_file).unwrap());
+            // in_writer.write_all(&input).unwrap();
+            // in_writer.flush().unwrap();
 
 
             // Compress input to output
@@ -1031,9 +1044,10 @@ mod test {
                 Box::new(ParCompressBuilder::<Gzip>::new()
                     .buffer_size(buf_size).unwrap()
                     .num_threads(num_threads).unwrap()
+                    .compression_level(Compression::new(comp_level))
                     .from_writer(out_writer))
             } else {
-                Box::new(SyncZBuilder::<Gzip, _>::new().from_writer(out_writer))
+                Box::new(SyncZBuilder::<Gzip, _>::new().compression_level(Compression::new(comp_level)).from_writer(out_writer))
             };
             for chunk in input.chunks(write_size) {
                 par_gz.write_all(chunk).unwrap();
@@ -1042,7 +1056,7 @@ mod test {
 
             // std::process::exit(1);
             // Read output back in
-            let mut reader = BufReader::new(File::open(output_file).unwrap());
+            let mut reader = BufReader::new(File::open(output_file.clone()).unwrap());
             let mut result = vec![];
             reader.read_to_end(&mut result).unwrap();
 
@@ -1062,6 +1076,7 @@ mod test {
             buf_size in DICT_SIZE..BUFSIZE,
             num_threads in 0..num_cpus::get(),
             write_size in 1..10_000usize,
+            comp_level in 1..9_u32
         ) {
             let dir = tempdir().unwrap();
 
@@ -1075,9 +1090,10 @@ mod test {
                 Box::new(ParCompressBuilder::<Mgzip>::new()
                     .buffer_size(buf_size).unwrap()
                     .num_threads(num_threads).unwrap()
+                    .compression_level(Compression::new(comp_level))
                     .from_writer(out_writer))
             } else {
-                Box::new(SyncZBuilder::<Mgzip, _>::new().from_writer(out_writer))
+                Box::new(SyncZBuilder::<Mgzip, _>::new().compression_level(Compression::new(comp_level)).from_writer(out_writer))
             };
             for chunk in input.chunks(write_size) {
                 par_gz.write_all(chunk).unwrap();
@@ -1090,7 +1106,7 @@ mod test {
             reader.read_to_end(&mut result).unwrap();
 
             // Decompress it
-            let mut gz = MultiGzDecoder::new(&result[..]);
+            let mut gz = MgzipSyncReader::new(&result[..]);
             let mut bytes = vec![];
             gz.read_to_end(&mut bytes).unwrap();
 
@@ -1103,8 +1119,10 @@ mod test {
         fn test_all_mgzip_decompress(
             input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)), // (DICT_SIZE * 10)),
             buf_size in DICT_SIZE..BUFSIZE,
-            num_threads in 1..num_cpus::get(),
+            num_threads in 0..num_cpus::get(),
+            num_threads_decomp in 0..num_cpus::get(),
             write_size in 1000..1001usize,
+            comp_level in 1..9_u32
         ) {
             let dir = tempdir().unwrap();
 
@@ -1114,9 +1132,10 @@ mod test {
 
 
             // Compress input to output
-            let mut par_gz = ParCompressBuilder::<Mgzip>::new()
-                    .buffer_size(buf_size).unwrap()
-                    .num_threads(num_threads).unwrap()
+            let mut par_gz = ZBuilder::<Mgzip, _>::new()
+                    .buffer_size(buf_size)
+                    .num_threads(num_threads)
+                    .compression_level(Compression::new(comp_level))
                     .from_writer(out_writer);
 
             for chunk in input.chunks(write_size) {
@@ -1126,7 +1145,11 @@ mod test {
 
             // Read output back in
             let reader = BufReader::new(File::open(output_file).unwrap());
-            let mut reader = ParDecompressBuilder::<Mgzip>::new().num_threads(num_threads).unwrap().from_reader(reader);
+            let mut reader: Box<dyn Read> = if num_threads_decomp > 0 {
+                Box::new(ParDecompressBuilder::<Mgzip>::new().num_threads(num_threads_decomp).unwrap().from_reader(reader))
+            } else {
+                Box::new(MgzipSyncReader::with_capacity(reader, buf_size))
+            };
             let mut result = vec![];
             reader.read_to_end(&mut result).unwrap();
 
@@ -1142,6 +1165,7 @@ mod test {
             buf_size in DICT_SIZE..BGZF_BLOCK_SIZE,
             num_threads in 0..num_cpus::get(),
             write_size in 1..10_000usize,
+            comp_level in 1..9_u32
         ) {
             let dir = tempdir().unwrap();
 
@@ -1155,9 +1179,10 @@ mod test {
                 Box::new(ParCompressBuilder::<Bgzf>::new()
                     .buffer_size(buf_size).unwrap()
                     .num_threads(num_threads).unwrap()
+                    .compression_level(Compression::new(comp_level))
                     .from_writer(out_writer))
             } else {
-                Box::new(SyncZBuilder::<Bgzf, _>::new().from_writer(out_writer))
+                Box::new(SyncZBuilder::<Bgzf, _>::new().compression_level(Compression::new(comp_level)).from_writer(out_writer))
             };
             for chunk in input.chunks(write_size) {
                 par_gz.write_all(chunk).unwrap();
@@ -1170,7 +1195,7 @@ mod test {
             reader.read_to_end(&mut result).unwrap();
 
             // Decompress it
-            let mut gz = MultiGzDecoder::new(&result[..]);
+            let mut gz = BgzfSyncReader::new(&result[..]);
             let mut bytes = vec![];
             gz.read_to_end(&mut bytes).unwrap();
 
@@ -1181,10 +1206,12 @@ mod test {
         #[test]
         #[ignore]
         fn test_all_bgzf_decompress(
-            input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)), // (DICT_SIZE * 10)),
+            input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)),
             buf_size in DICT_SIZE..BGZF_BLOCK_SIZE,
-            num_threads in 1..num_cpus::get(),
-            write_size in 1000..1001usize,
+            num_threads in 0..num_cpus::get(),
+            num_threads_decomp in 0..num_cpus::get(),
+            write_size in 1000..1001_usize,
+            comp_level in 1..9_u32
         ) {
             let dir = tempdir().unwrap();
 
@@ -1194,9 +1221,10 @@ mod test {
 
 
             // Compress input to output
-            let mut par_gz = ParCompressBuilder::<Bgzf>::new()
-                    .buffer_size(buf_size).unwrap()
-                    .num_threads(num_threads).unwrap()
+            let mut par_gz = ZBuilder::<Bgzf, _>::new()
+                    .buffer_size(buf_size)
+                    .num_threads(num_threads)
+                    .compression_level(Compression::new(comp_level))
                     .from_writer(out_writer);
 
             for chunk in input.chunks(write_size) {
@@ -1206,7 +1234,11 @@ mod test {
 
             // Read output back in
             let reader = BufReader::new(File::open(output_file).unwrap());
-            let mut reader = ParDecompressBuilder::<Bgzf>::new().num_threads(num_threads).unwrap().from_reader(reader);
+            let mut reader: Box<dyn Read> = if num_threads_decomp > 0 {
+                Box::new(ParDecompressBuilder::<Bgzf>::new().num_threads(num_threads_decomp).unwrap().from_reader(reader))
+            } else {
+                Box::new(BgzfSyncReader::new(reader))
+            };
             let mut result = vec![];
             reader.read_to_end(&mut result).unwrap();
 
@@ -1258,7 +1290,8 @@ mod test {
             input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)),
             buf_size in DICT_SIZE..BUFSIZE,
             num_threads in 1..num_cpus::get(),
-            write_size in 1..10_000usize,
+            write_size in 1..10_000_usize,
+            comp_level in 0..9_u32
         ) {
             let dir = tempdir().unwrap();
 
@@ -1272,9 +1305,10 @@ mod test {
                 Box::new(ParCompressBuilder::<Zlib>::new()
                     .buffer_size(buf_size).unwrap()
                     .num_threads(num_threads).unwrap()
+                    .compression_level(Compression::new(comp_level))
                     .from_writer(out_writer))
             } else {
-                Box::new(SyncZBuilder::<Zlib, _>::new().from_writer(out_writer))
+                Box::new(SyncZBuilder::<Zlib, _>::new().compression_level(Compression::new(comp_level)).from_writer(out_writer))
             };
             for chunk in input.chunks(write_size) {
                 par_gz.write_all(chunk).unwrap();
