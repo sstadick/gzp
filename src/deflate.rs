@@ -672,6 +672,7 @@ mod test {
     use tempfile::tempdir;
 
     use crate::bgzf::{BgzfSyncReader, BGZF_BLOCK_SIZE};
+    use crate::mgzip::MgzipSyncReader;
     use crate::par::compress::{ParCompress, ParCompressBuilder};
     use crate::par::decompress::ParDecompressBuilder;
     use crate::syncz::SyncZBuilder;
@@ -1105,7 +1106,7 @@ mod test {
             reader.read_to_end(&mut result).unwrap();
 
             // Decompress it
-            let mut gz = MultiGzDecoder::new(&result[..]);
+            let mut gz = MgzipSyncReader::new(&result[..]);
             let mut bytes = vec![];
             gz.read_to_end(&mut bytes).unwrap();
 
@@ -1118,7 +1119,8 @@ mod test {
         fn test_all_mgzip_decompress(
             input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)), // (DICT_SIZE * 10)),
             buf_size in DICT_SIZE..BUFSIZE,
-            num_threads in 1..num_cpus::get(),
+            num_threads in 0..num_cpus::get(),
+            num_threads_decomp in 0..num_cpus::get(),
             write_size in 1000..1001usize,
             comp_level in 1..9_u32
         ) {
@@ -1130,9 +1132,9 @@ mod test {
 
 
             // Compress input to output
-            let mut par_gz = ParCompressBuilder::<Mgzip>::new()
-                    .buffer_size(buf_size).unwrap()
-                    .num_threads(num_threads).unwrap()
+            let mut par_gz = ZBuilder::<Mgzip, _>::new()
+                    .buffer_size(buf_size)
+                    .num_threads(num_threads)
                     .compression_level(Compression::new(comp_level))
                     .from_writer(out_writer);
 
@@ -1143,7 +1145,11 @@ mod test {
 
             // Read output back in
             let reader = BufReader::new(File::open(output_file).unwrap());
-            let mut reader = ParDecompressBuilder::<Mgzip>::new().num_threads(num_threads).unwrap().from_reader(reader);
+            let mut reader: Box<dyn Read> = if num_threads_decomp > 0 {
+                Box::new(ParDecompressBuilder::<Mgzip>::new().num_threads(num_threads_decomp).unwrap().from_reader(reader))
+            } else {
+                Box::new(MgzipSyncReader::with_capacity(reader, buf_size))
+            };
             let mut result = vec![];
             reader.read_to_end(&mut result).unwrap();
 

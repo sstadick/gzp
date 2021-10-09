@@ -106,7 +106,7 @@ where
         let (tx_writer, rx_writer) = bounded(self.num_threads * 2);
         let buffer_size = self.buffer_size;
         let comp_level = self.compression_level;
-        let pin_threads = self.pin_threads.clone();
+        let pin_threads = self.pin_threads;
         let format = self.format;
         let handle = std::thread::spawn(move || {
             ParCompress::run(

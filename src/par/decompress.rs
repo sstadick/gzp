@@ -64,7 +64,7 @@ where
         let (tx_reader, rx_reader) = bounded(self.num_threads * 2);
         let buffer_size = self.buffer_size;
         let format = self.format;
-        let pin_threads = self.pin_threads.clone();
+        let pin_threads = self.pin_threads;
         let handle = std::thread::spawn(move || {
             ParDecompress::run(&tx_reader, reader, self.num_threads, format, pin_threads)
         });

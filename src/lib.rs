@@ -87,7 +87,10 @@ use crate::check::Check;
 use crate::par::compress::ParCompressBuilder;
 use crate::syncz::{SyncZ, SyncZBuilder};
 
-pub mod bgzf;
+pub use crate::bgzf::{BgzfSyncReader, BgzfSyncWriter};
+pub use crate::mgzip::{MgzipSyncReader, MgzipSyncWriter};
+
+mod bgzf;
 pub mod check;
 #[cfg(feature = "deflate")]
 pub mod deflate;

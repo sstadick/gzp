@@ -5,19 +5,17 @@
 
 use std::io::Write;
 use std::io::{self, Read};
-use std::os::unix::prelude::OsStrExt;
 
-use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
-use bytes::{Buf, BufMut, BytesMut};
+use byteorder::{LittleEndian, WriteBytesExt};
+use bytes::{Buf, BytesMut};
+use flate2::Compression;
 #[cfg(not(feature = "libdeflate"))]
 use flate2::{Compress, FlushCompress};
-use flate2::{Compression, Decompress};
 
-use crate::check::Check;
 #[cfg(not(feature = "libdeflate"))]
 use crate::check::Check;
 use crate::deflate::Bgzf;
-use crate::{BlockFormatSpec, FooterValues, FormatSpec, GzpError, BUFSIZE};
+use crate::{BlockFormatSpec, FooterValues, GzpError, BUFSIZE};
 
 pub(crate) const BGZF_BLOCK_SIZE: usize = 65280;
 // default from bgzf, compress(BGZF_BLOCK_SIZE) < BGZF_MAX_BLOCK_SIZE
@@ -50,13 +48,13 @@ fn extra_amount(input_len: usize) -> usize {
     std::cmp::max(128, (input_len as f64 * EXTRA) as usize)
 }
 
+/// A sync implementation of a Bgzf reader
 pub struct BgzfSyncReader<R>
 where
     R: Read,
 {
     buffer: BytesMut,
     compressed_buffer: BytesMut,
-    blocksize: usize,
     #[cfg(feature = "libdeflate")]
     decompressor: libdeflater::Decompressor,
     #[cfg(not(feature = "libdeflate"))]
@@ -70,11 +68,6 @@ where
     R: Read,
 {
     pub fn new(reader: R) -> Self {
-        Self::with_capacity(reader, BGZF_BLOCK_SIZE)
-    }
-    pub fn with_capacity(reader: R, blocksize: usize) -> Self {
-        assert!(blocksize <= BGZF_BLOCK_SIZE);
-
         #[cfg(feature = "libdeflate")]
         let decompressor = libdeflater::Decompressor::new();
 
@@ -84,7 +77,6 @@ where
         Self {
             buffer: BytesMut::with_capacity(BUFSIZE),
             compressed_buffer: BytesMut::with_capacity(BGZF_BLOCK_SIZE),
-            blocksize,
             decompressor,
             reader,
             format: Bgzf {},
@@ -143,24 +135,46 @@ where
     }
 }
 
-// TODO:
-// - Add a sync block decompress trait
-// - Add the non-libdeflate versions of this
-// - Impl drop for Reader?
-// - Is there a way to do this without two reads in a row? perf check against bgzip
-// - bgzip has about 30-40s faster write speed on decompression - why
-
 /// Decompress a block of bytes
+#[cfg(feature = "libdeflate")]
+#[inline]
 pub fn decompress(
     input: &[u8],
     decoder: &mut libdeflater::Decompressor,
     output: &mut [u8],
     footer_vals: FooterValues,
 ) -> Result<(), GzpError> {
-    // let check_sum = LittleEndian::read_u32(&input[input.len() - 8..input.len() - 4]);
-    // let check_amount = LittleEndian::read_u32(&input[input.len() - 4..]);
     if footer_vals.amount != 0 {
         let _bytes_decompressed = decoder.deflate_decompress(&input[..input.len() - 8], output)?;
+    }
+    let mut new_check = libdeflater::Crc::new();
+    new_check.update(output);
+
+    if footer_vals.sum != new_check.sum() {
+        return Err(GzpError::InvalidCheck {
+            found: new_check.sum(),
+            expected: footer_vals.sum,
+        });
+    }
+    Ok(())
+}
+
+/// Decompress a block of bytes
+#[cfg(not(feature = "libdeflate"))]
+#[inline]
+pub fn decompress(
+    input: &[u8],
+    decoder: &mut Decompress,
+    output: &mut [u8],
+    footer_vals: FooterValues,
+) -> Result<(), GzpError> {
+    if footer_vals.amount != 0 {
+        let _bytes_decompressed = decoder.decompress(
+            &input[..input.len() - 8],
+            output,
+            flate2::FlushDecompress::Finish,
+        )?;
+        decoder.reset(false);
     }
     let mut new_check = libdeflater::Crc::new();
     new_check.update(output);
@@ -186,10 +200,6 @@ pub fn compress(
     // let mut buffer = Vec::with_capacity(input.len() + 64);
     let mut buffer =
         vec![0; BGZF_HEADER_SIZE + input.len() + extra_amount(input.len()) + BGZF_FOOTER_SIZE];
-    // let mut encoder = libdeflater::Compressor::new(
-    //     libdeflater::CompressionLvl::new(compression_level.level() as i32)
-    //         .map_err(|e| GzpError::LibDeflaterCompressionLvl(e))?,
-    // );
 
     let bytes_written = encoder
         .deflate_compress(input, &mut buffer[BGZF_HEADER_SIZE..])
@@ -329,6 +339,7 @@ impl<R> Read for BgzfSyncReader<R>
 where
     R: Read,
 {
+    #[inline]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let mut total_read = 0;
         loop {
