@@ -164,7 +164,6 @@ Note that tests will take 30-60s.
 All benchmarks were run on the file in `./bench-data/shakespeare.txt` catted together 100 times which creates a rough
 550Mb file.
 
-The primary benchmark takeaway is that with 2 threads `gzp` is about as fast as single threaded. With 4 threads is 2-3x
-faster than single threaded and improves from there. It is recommended to use at least 4 threads.
+The primary benchmark takeaway is that compression time decreases proportionately to the number of threads used.
 
 ![benchmarks](./violin.svg)
