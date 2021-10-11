@@ -1,3 +1,7 @@
+# v0.9.1
+
+- mgzip and bgzf formats were relying on libdeflater features even when under the `not(libdeflate)` config, this is now fixed
+
 # v0.9.0
 
 - Fix [crabz issue 9](https://github.com/sstadick/crabz/issues/11)             
