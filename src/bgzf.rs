@@ -10,7 +10,7 @@ use byteorder::{LittleEndian, WriteBytesExt};
 use bytes::{Buf, BytesMut};
 use flate2::Compression;
 #[cfg(not(feature = "libdeflate"))]
-use flate2::{Compress, FlushCompress};
+use flate2::{Compress, Decompress, FlushCompress};
 
 #[cfg(not(feature = "libdeflate"))]
 use crate::check::Check;
@@ -72,7 +72,7 @@ where
         let decompressor = libdeflater::Decompressor::new();
 
         #[cfg(not(feature = "libdeflate"))]
-        let decompressor = Decompress::new();
+        let decompressor = Decompress::new(false);
 
         Self {
             buffer: BytesMut::with_capacity(BUFSIZE),
@@ -168,6 +168,8 @@ pub fn decompress(
     output: &mut [u8],
     footer_vals: FooterValues,
 ) -> Result<(), GzpError> {
+    use flate2::Crc;
+
     if footer_vals.amount != 0 {
         let _bytes_decompressed = decoder.decompress(
             &input[..input.len() - 8],
@@ -176,7 +178,7 @@ pub fn decompress(
         )?;
         decoder.reset(false);
     }
-    let mut new_check = libdeflater::Crc::new();
+    let mut new_check = flate2::Crc::new();
     new_check.update(output);
 
     if footer_vals.sum != new_check.sum() {
