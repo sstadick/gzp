@@ -115,6 +115,9 @@ pub enum GzpError {
     #[error("Invalid buffer size ({0}), must be >= {1}")]
     BufferSize(usize, usize),
 
+    #[error("Compressed block size ({0}) exceeds max allowed: ({1})")]
+    BlockSizeExceeded(usize, usize),
+
     #[error("Failed to send over channel.")]
     ChannelSend,
 

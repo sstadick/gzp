@@ -209,7 +209,10 @@ pub fn compress(
 
     // Make sure that compressed buffer is smaller than
     if bytes_written >= MAX_BGZF_BLOCK_SIZE {
-        return Err(GzpError::Unknown);
+        return Err(GzpError::BlockSizeExceeded(
+            bytes_written,
+            MAX_BGZF_BLOCK_SIZE,
+        ));
     }
     let mut check = libdeflater::Crc::new();
     check.update(input);
@@ -242,7 +245,10 @@ pub fn compress(
 
         // Make sure that compressed buffer is smaller than
         if !(buffer.len() < MAX_BGZF_BLOCK_SIZE) {
-            return Err(GzpError::Unknown);
+            return Err(GzpError::BlockSizeExceeded(
+                buffer.len(),
+                MAX_BGZF_BLOCK_SIZE,
+            ));
         }
         let mut check = crate::check::Crc32::new();
         check.update(input);
@@ -317,8 +323,11 @@ where
 
     /// Flush this output stream, ensuring all intermediately buffered contents are sent.
     fn flush(&mut self) -> std::io::Result<()> {
-        let b = self.buffer.split_to(self.buffer.len()).freeze();
-        if !b.is_empty() {
+        while !self.buffer.is_empty() {
+            let b = self
+                .buffer
+                .split_to(std::cmp::min(self.buffer.len(), MAX_BGZF_BLOCK_SIZE))
+                .freeze();
             let compressed = compress(&b[..], &mut self.compressor, self.compression_level)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
             self.writer.write_all(&compressed)?;
