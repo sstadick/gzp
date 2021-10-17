@@ -1,3 +1,7 @@
+# v0.9.2
+
+- Fix bug with BGZF format flush that would send blocks of size > max block size and return an unknown error.
+
 # v0.9.1
 
 - mgzip and bgzf formats were relying on libdeflater features even when under the `not(libdeflate)` config, this is now fixed
