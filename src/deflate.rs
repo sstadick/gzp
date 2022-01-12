@@ -411,7 +411,7 @@ impl BlockFormatSpec for Mgzip {
         // Check that the extra field flag is set
         if bytes[3] & 4 != 4 {
             Err(GzpError::InvalidHeader("Extra field flag not set"))
-        } else if bytes[13] == b'I' && bytes[14] == b'G' {
+        } else if bytes[12] != b'I' || bytes[13] != b'G' {
             // Check for IG in SID
             Err(GzpError::InvalidHeader("Bad SID"))
         } else {
@@ -560,7 +560,7 @@ impl BlockFormatSpec for Bgzf {
         // Check that the extra field flag is set
         if bytes[3] & 4 != 4 {
             Err(GzpError::InvalidHeader("Extra field flag not set"))
-        } else if bytes[13] == b'B' && bytes[14] == b'C' {
+        } else if bytes[12] != b'B' || bytes[13] != b'C' {
             // Check for BC in SID
             Err(GzpError::InvalidHeader("Bad SID"))
         } else {
