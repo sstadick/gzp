@@ -1,6 +1,10 @@
-# v0.9.4
+# v0.9.5
 
 - Fix regression in v0.9.3 that failed to add EOF block for BGZF files. EOF is now properly added.
+
+# v0.9.4
+
+- Yanked - intended to included changes from v0.9.5 but was actually just v0.9.3 again.
 
 # v0.9.3
 
