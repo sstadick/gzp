@@ -244,26 +244,31 @@ where
     /// # Panics
     /// - If called after `finish`
     fn flush_last(&mut self, is_last: bool) -> std::io::Result<()> {
-        let (mut m, r) = Message::new_parts(
-            self.buffer.split().freeze(),
-            std::mem::replace(&mut self.dictionary, None),
-        );
-        m.is_last = is_last;
+        while !self.buffer.is_empty() {
+            let b = self
+                .buffer
+                .split_to(std::cmp::min(self.buffer.len(), self.buffer_size))
+                .freeze();
+            let (mut m, r) = Message::new_parts(b, std::mem::replace(&mut self.dictionary, None));
+            if is_last && self.buffer.is_empty() {
+                m.is_last = true;
+            }
 
-        if m.buffer.len() >= DICT_SIZE && !is_last && self.format.needs_dict() {
-            self.dictionary = Some(m.buffer.slice(m.buffer.len() - DICT_SIZE..))
+            if m.buffer.len() >= DICT_SIZE && !m.is_last && self.format.needs_dict() {
+                self.dictionary = Some(m.buffer.slice(m.buffer.len() - DICT_SIZE..));
+            }
+
+            self.tx_writer
+                .as_ref()
+                .unwrap()
+                .send(r)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            self.tx_compressor
+                .as_ref()
+                .unwrap()
+                .send(m)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         }
-
-        self.tx_writer
-            .as_ref()
-            .unwrap()
-            .send(r)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        self.tx_compressor
-            .as_ref()
-            .unwrap()
-            .send(m)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         Ok(())
     }
 }
@@ -283,6 +288,9 @@ where
     /// - If called twice
     fn finish(&mut self) -> Result<(), GzpError> {
         self.flush_last(true)?;
+
+        // while !self.tx_compressor.as_ref().unwrap().is_empty() {}
+        // while !self.tx_writer.as_ref().unwrap().is_empty() {}
         drop(self.tx_compressor.take());
         drop(self.tx_writer.take());
         match self.handle.take().unwrap().join() {
@@ -314,7 +322,7 @@ where
     /// - If called after calling `finish`
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.buffer.extend_from_slice(buf);
-        if self.buffer.len() > self.buffer_size {
+        while self.buffer.len() > self.buffer_size {
             let b = self.buffer.split_to(self.buffer_size).freeze();
             let (m, r) = Message::new_parts(b, std::mem::replace(&mut self.dictionary, None));
             // Bytes uses and ARC, this is O(1) to get the last 32k bytes from teh previous chunk

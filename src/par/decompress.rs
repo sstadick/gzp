@@ -224,6 +224,7 @@ where
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(crate) struct DMessage {
     buffer: Bytes,
     oneshot: Sender<BytesMut>,

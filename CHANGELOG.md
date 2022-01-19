@@ -1,3 +1,7 @@
+# v0.9.3
+
+- Fix [gzp issue 30](https://github.com/sstadick/gzp/issues/30) where compression will fail for BGZF on a final call to `flush` when the remaining bytes are > the the max allowed bytes by that format. Additionally this will now keep the `Writer` buffer at less than `buffer_size` in the even that very large calls to write are happening. Previously this would just accumulate a very large buffer until flush was called, potentially leading to out-of-memory errors.
+
 # v0.9.2
 
 - Fix bug with BGZF format flush that would send blocks of size > max block size and return an unknown error.
