@@ -206,7 +206,6 @@ pub fn compress(
     let bytes_written = encoder
         .deflate_compress(input, &mut buffer[BGZF_HEADER_SIZE..])
         .map_err(GzpError::LibDeflaterCompress)?;
-
     // Make sure that compressed buffer is smaller than
     if bytes_written >= MAX_BGZF_BLOCK_SIZE {
         return Err(GzpError::BlockSizeExceeded(
@@ -326,7 +325,7 @@ where
         while !self.buffer.is_empty() {
             let b = self
                 .buffer
-                .split_to(std::cmp::min(self.buffer.len(), MAX_BGZF_BLOCK_SIZE))
+                .split_to(std::cmp::min(self.buffer.len(), BGZF_BLOCK_SIZE))
                 .freeze();
             let compressed = compress(&b[..], &mut self.compressor, self.compression_level)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;

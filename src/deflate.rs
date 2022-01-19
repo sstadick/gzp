@@ -1160,11 +1160,11 @@ mod test {
 
         #[test]
         #[ignore]
-        fn test_all_bgzf(
+        fn test_all_bgzf_compress(
             input in prop::collection::vec(0..u8::MAX, 1..(DICT_SIZE * 10)),
             buf_size in DICT_SIZE..BGZF_BLOCK_SIZE,
             num_threads in 0..num_cpus::get(),
-            write_size in 1..10_000usize,
+            write_size in 1..(4*BGZF_BLOCK_SIZE),
             comp_level in 1..9_u32
         ) {
             let dir = tempdir().unwrap();
@@ -1200,7 +1200,7 @@ mod test {
             gz.read_to_end(&mut bytes).unwrap();
 
             // Assert decompressed output is equal to input
-            assert_eq!(input.to_vec(), bytes);
+            prop_assert_eq!(input.to_vec(), bytes, "BGZF fail");
         }
 
         #[test]
