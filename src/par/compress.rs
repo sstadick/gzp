@@ -244,7 +244,7 @@ where
     /// # Panics
     /// - If called after `finish`
     fn flush_last(&mut self, is_last: bool) -> std::io::Result<()> {
-        while !self.buffer.is_empty() {
+        loop {
             let b = self
                 .buffer
                 .split_to(std::cmp::min(self.buffer.len(), self.buffer_size))
@@ -268,6 +268,9 @@ where
                 .unwrap()
                 .send(m)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            if self.buffer.is_empty() {
+                break;
+            }
         }
         Ok(())
     }
