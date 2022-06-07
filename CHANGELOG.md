@@ -1,3 +1,7 @@
+# v0.9.6
+
+- Update deps, specifically flate2
+
 # v0.9.5
 
 - Fix regression in v0.9.3 that failed to add EOF block for BGZF files. EOF is now properly added.
