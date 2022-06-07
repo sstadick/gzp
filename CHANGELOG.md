@@ -1,3 +1,7 @@
+# v0.10.0
+
+- Drop support for cloudflare zlib via flate2 to resolve conflicting symbols
+
 # v0.9.6
 
 - Update deps, specifically flate2
