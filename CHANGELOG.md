@@ -1,3 +1,7 @@
+# v0.10.1
+
+- This release makes bgzf, mgzip, and the `FooterValues.sum` value public
+
 # v0.10.0
 
 - Drop support for cloudflare zlib via flate2 to resolve conflicting symbols
