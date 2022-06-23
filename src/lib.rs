@@ -94,7 +94,7 @@ pub mod bgzf;
 pub mod check;
 #[cfg(feature = "deflate")]
 pub mod deflate;
-mod mgzip;
+pub mod mgzip;
 pub mod par;
 #[cfg(feature = "snappy")]
 pub mod snap;
