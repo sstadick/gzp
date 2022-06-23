@@ -396,9 +396,9 @@ pub trait FormatSpec: Clone + Copy + Debug + Send + Sync + 'static {
 #[derive(Debug, Copy, Clone)]
 pub struct FooterValues {
     /// The check sum
-    sum: u32,
+    pub sum: u32,
     /// The number of bytes that went into the sum
-    amount: u32,
+    pub amount: u32,
 }
 
 pub trait BlockFormatSpec: FormatSpec {
