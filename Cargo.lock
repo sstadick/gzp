@@ -147,9 +147,9 @@ dependencies = [
 
 [[package]]
 name = "core_affinity"
-version = "0.7.4"
+version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29b34441fb375bd99fd9294f6fe265e6e3aec61b21cae3e16a840969701c0072"
+checksum = "fe2ebd14a61ca9d5289105b02fe9075ca19eeb2c38fdb64fac76f883048113ee"
 dependencies = [
  "libc",
  "num_cpus",
