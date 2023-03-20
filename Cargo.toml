@@ -35,7 +35,7 @@ any_zlib = ["flate2/any_zlib"]
 [dependencies]
 bytes = "1.3.0"
 num_cpus = "1.15.0"
-thiserror = "1.0.38"
+thiserror = "1.0.40"
 flume = "0.10.14"
 byteorder = "1.4.3"
 flate2 = { version = "1.0.25", default-features = false, optional = true }
