@@ -15,7 +15,7 @@ fn compress_with_gzip(num_threads: usize, buffer_size: usize, compression_level:
     let dir = tempdir().unwrap();
     let output_file = File::create(dir.path().join("shakespeare_gzip.txt.gz")).unwrap();
 
-    let mut writer: Box<dyn ZWriter> = if num_threads > 0 {
+    let mut writer: Box<dyn ZWriter<_>> = if num_threads > 0 {
         Box::new(
             ParCompressBuilder::<Gzip>::new()
                 .num_threads(num_threads)
@@ -50,7 +50,7 @@ fn compress_with_gzip(num_threads: usize, buffer_size: usize, compression_level:
 fn compress_with_snap(num_threads: usize, buffer_size: usize) {
     let dir = tempdir().unwrap();
     let output_file = File::create(dir.path().join("shakespeare_gzip.txt.gz")).unwrap();
-    let mut writer: Box<dyn ZWriter> = if num_threads > 0 {
+    let mut writer: Box<dyn ZWriter<_>> = if num_threads > 0 {
         Box::new(
             ParCompressBuilder::<Snap>::new()
                 .num_threads(num_threads)

@@ -15,7 +15,7 @@
 //! use gzp::{snap::Snap, par::compress::{ParCompressBuilder, ParCompress}, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParCompress<Snap> = ParCompressBuilder::new().from_writer(writer);
+//! let mut parz: ParCompress<Snap, _> = ParCompressBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
@@ -94,11 +94,15 @@ where
     }
 }
 
-impl<W: Write> ZWriter for SyncZ<snap::write::FrameEncoder<W>> {
+impl<W: Write> ZWriter<W> for SyncZ<snap::write::FrameEncoder<W>> {
     /// This is a no-op for snappy and does nothing
-    fn finish(&mut self) -> Result<(), GzpError> {
-        drop(self.inner.take());
-        Ok(())
+    fn finish(&mut self) -> Result<W, GzpError> {
+        Ok(self
+            .inner
+            .take()
+            .unwrap()
+            .into_inner()
+            .map_err(|e| e.into_error())?)
     }
 }
 
@@ -135,7 +139,7 @@ mod test {
         ";
 
         // Compress input to output
-        let mut par_gz: ParCompress<Snap> = ParCompressBuilder::new().from_writer(out_writer);
+        let mut par_gz: ParCompress<Snap, _> = ParCompressBuilder::new().from_writer(out_writer);
         par_gz.write_all(input).unwrap();
         par_gz.finish().unwrap();
 
@@ -170,7 +174,7 @@ mod test {
 
 
             // Compress input to output
-            let mut par_gz: Box<dyn ZWriter> = if num_threads > 0 {
+            let mut par_gz: Box<dyn ZWriter<_>> = if num_threads > 0 {
                 Box::new(ParCompressBuilder::<Snap>::new()
                     .buffer_size(buf_size).unwrap()
                     .num_threads(num_threads).unwrap()

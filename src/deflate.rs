@@ -15,7 +15,7 @@
 //! use gzp::{deflate::Zlib, par::compress::{ParCompress, ParCompressBuilder}, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParCompress<Zlib> = ParCompressBuilder::new().from_writer(writer);
+//! let mut parz: ParCompress<Zlib,_> = ParCompressBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
@@ -153,10 +153,9 @@ where
     }
 }
 
-impl<W: Write> ZWriter for SyncZ<GzEncoder<W>> {
-    fn finish(&mut self) -> Result<(), GzpError> {
-        self.inner.take().unwrap().finish()?;
-        Ok(())
+impl<W: Write> ZWriter<W> for SyncZ<GzEncoder<W>> {
+    fn finish(&mut self) -> Result<W, GzpError> {
+        Ok(self.inner.take().unwrap().finish()?)
     }
 }
 
@@ -265,10 +264,9 @@ where
 }
 
 #[cfg(feature = "any_zlib")]
-impl<W: Write> ZWriter for SyncZ<ZlibEncoder<W>> {
-    fn finish(&mut self) -> Result<(), GzpError> {
-        self.inner.take().unwrap().finish()?;
-        Ok(())
+impl<W: Write> ZWriter<W> for SyncZ<ZlibEncoder<W>> {
+    fn finish(&mut self) -> Result<W, GzpError> {
+        Ok(self.inner.take().unwrap().finish()?)
     }
 }
 
@@ -344,10 +342,9 @@ where
     }
 }
 
-impl<W: Write> ZWriter for SyncZ<DeflateEncoder<W>> {
-    fn finish(&mut self) -> Result<(), GzpError> {
-        self.inner.take().unwrap().finish()?;
-        Ok(())
+impl<W: Write> ZWriter<W> for SyncZ<DeflateEncoder<W>> {
+    fn finish(&mut self) -> Result<W, GzpError> {
+        Ok(self.inner.take().unwrap().finish()?)
     }
 }
 
@@ -494,10 +491,9 @@ where
     }
 }
 
-impl<W: Write> ZWriter for SyncZ<MgzipSyncWriter<W>> {
-    fn finish(&mut self) -> Result<(), GzpError> {
-        self.inner.take().unwrap().flush()?;
-        Ok(())
+impl<W: Write> ZWriter<W> for SyncZ<MgzipSyncWriter<W>> {
+    fn finish(&mut self) -> Result<W, GzpError> {
+        Ok(self.inner.take().unwrap().finish()?)
     }
 }
 
@@ -650,10 +646,9 @@ where
     }
 }
 
-impl<W: Write> ZWriter for SyncZ<BgzfSyncWriter<W>> {
-    fn finish(&mut self) -> Result<(), GzpError> {
-        self.inner.take().unwrap().flush()?;
-        Ok(())
+impl<W: Write> ZWriter<W> for SyncZ<BgzfSyncWriter<W>> {
+    fn finish(&mut self) -> Result<W, GzpError> {
+        Ok(self.inner.take().unwrap().finish()?)
     }
 }
 
@@ -695,7 +690,7 @@ mod test {
         ";
 
         // Compress input to output
-        let mut par_gz: ParCompress<Mgzip> = ParCompressBuilder::new().from_writer(out_writer);
+        let mut par_gz: ParCompress<Mgzip, _> = ParCompressBuilder::new().from_writer(out_writer);
         par_gz.write_all(input).unwrap();
         par_gz.finish().unwrap();
 
@@ -728,7 +723,7 @@ mod test {
         ";
 
         // Compress input to output
-        let mut par_gz: ParCompress<Gzip> = ParCompressBuilder::new().from_writer(out_writer);
+        let mut par_gz: ParCompress<Gzip, _> = ParCompressBuilder::new().from_writer(out_writer);
         par_gz.write_all(input).unwrap();
         par_gz.finish().unwrap();
 
@@ -761,7 +756,7 @@ mod test {
         ";
 
         // Compress input to output
-        let mut par_gz: ParCompress<Gzip> = ParCompressBuilder::new().from_writer(out_writer);
+        let mut par_gz: ParCompress<Gzip, _> = ParCompressBuilder::new().from_writer(out_writer);
         par_gz.write_all(input).unwrap();
         drop(par_gz);
 
@@ -861,7 +856,7 @@ mod test {
         ";
 
         // Compress input to output
-        let mut par_gz: ParCompress<Zlib> = ParCompressBuilder::new().from_writer(out_writer);
+        let mut par_gz: ParCompress<Zlib, _> = ParCompressBuilder::new().from_writer(out_writer);
         par_gz.write_all(input).unwrap();
         par_gz.finish().unwrap();
 
@@ -938,7 +933,7 @@ mod test {
         ];
 
         // Compress input to output
-        let mut par_gz: ParCompress<Gzip> = ParCompressBuilder::new()
+        let mut par_gz: ParCompress<Gzip, _> = ParCompressBuilder::new()
             .buffer_size(DICT_SIZE)
             .unwrap()
             .from_writer(out_writer);
@@ -974,7 +969,7 @@ mod test {
         ";
 
         // Compress input to output
-        let mut par_gz: ParCompress<Mgzip> = ParCompressBuilder::new().from_writer(out_writer);
+        let mut par_gz: ParCompress<Mgzip, _> = ParCompressBuilder::new().from_writer(out_writer);
         par_gz.write_all(input).unwrap();
         par_gz.finish().unwrap();
 
@@ -1003,7 +998,7 @@ mod test {
         ";
 
         // Compress input to output
-        let mut par_gz: ParCompress<Bgzf> = ParCompressBuilder::new().from_writer(out_writer);
+        let mut par_gz: ParCompress<Bgzf, _> = ParCompressBuilder::new().from_writer(out_writer);
         par_gz.write_all(input).unwrap();
         par_gz.finish().unwrap();
 
@@ -1040,7 +1035,7 @@ mod test {
 
 
             // Compress input to output
-            let mut par_gz: Box<dyn ZWriter> = if num_threads > 0 {
+            let mut par_gz: Box<dyn ZWriter<_>> = if num_threads > 0 {
                 Box::new(ParCompressBuilder::<Gzip>::new()
                     .buffer_size(buf_size).unwrap()
                     .num_threads(num_threads).unwrap()
@@ -1086,7 +1081,7 @@ mod test {
 
 
             // Compress input to output
-            let mut par_gz: Box<dyn ZWriter> = if num_threads > 0 {
+            let mut par_gz: Box<dyn ZWriter<_>> = if num_threads > 0 {
                 Box::new(ParCompressBuilder::<Mgzip>::new()
                     .buffer_size(buf_size).unwrap()
                     .num_threads(num_threads).unwrap()
@@ -1175,7 +1170,7 @@ mod test {
 
 
             // Compress input to output
-            let mut par_gz: Box<dyn ZWriter> = if num_threads > 0 {
+            let mut par_gz: Box<dyn ZWriter<_>> = if num_threads > 0 {
                 Box::new(ParCompressBuilder::<Bgzf>::new()
                     .buffer_size(buf_size).unwrap()
                     .num_threads(num_threads).unwrap()
@@ -1301,7 +1296,7 @@ mod test {
 
 
             // Compress input to output
-            let mut par_gz: Box<dyn ZWriter> = if num_threads > 0 {
+            let mut par_gz: Box<dyn ZWriter<_>> = if num_threads > 0 {
                 Box::new(ParCompressBuilder::<Zlib>::new()
                     .buffer_size(buf_size).unwrap()
                     .num_threads(num_threads).unwrap()
