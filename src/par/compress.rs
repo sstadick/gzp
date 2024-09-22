@@ -17,7 +17,7 @@
 //! ```
 use std::{
     io::{self, Write},
-    thread::JoinHandle,
+    thread::{JoinHandle, Scope, ScopedJoinHandle},
 };
 
 use bytes::{Bytes, BytesMut};
@@ -107,26 +107,62 @@ where
     }
 
     /// Create a configured [`ParCompress`] object.
-    pub fn from_writer<W: Write + Send + 'static>(self, writer: W) -> ParCompress<F, W> {
+    pub fn from_writer<W: Write + Send + 'static>(self, writer: W) -> ParCompress<'static, F, W> {
         let (tx_compressor, rx_compressor) = bounded(self.num_threads * 2);
         let (tx_writer, rx_writer) = bounded(self.num_threads * 2);
         let buffer_size = self.buffer_size;
         let comp_level = self.compression_level;
         let pin_threads = self.pin_threads;
         let format = self.format;
+        let num_threads = self.num_threads;
         let handle = std::thread::spawn(move || {
             ParCompress::run(
                 &rx_compressor,
                 &rx_writer,
                 writer,
-                self.num_threads,
+                num_threads,
                 comp_level,
                 format,
                 pin_threads,
             )
         });
         ParCompress {
-            handle: Some(handle),
+            handle: Some(MaybeScopedJoinHandle::Static(handle)),
+            tx_compressor: Some(tx_compressor),
+            tx_writer: Some(tx_writer),
+            dictionary: None,
+            buffer: BytesMut::with_capacity(buffer_size),
+            buffer_size,
+            format,
+        }
+    }
+
+    /// Create a configured [`ParCompress`] object.
+    pub fn from_borrowed_writer<'scope, 'env, W: Write + Send + 'scope>(
+        self,
+        writer: W,
+        scope: &'scope Scope<'scope, 'env>,
+    ) -> ParCompress<'scope, F, W> {
+        let (tx_compressor, rx_compressor) = bounded(self.num_threads * 2);
+        let (tx_writer, rx_writer) = bounded(self.num_threads * 2);
+        let buffer_size = self.buffer_size;
+        let comp_level = self.compression_level;
+        let pin_threads = self.pin_threads;
+        let format = self.format;
+        let num_threads = self.num_threads;
+        let handle = scope.spawn(move || {
+            ParCompress::run(
+                &rx_compressor,
+                &rx_writer,
+                writer,
+                num_threads,
+                comp_level,
+                format,
+                pin_threads,
+            )
+        });
+        ParCompress {
+            handle: Some(MaybeScopedJoinHandle::Scoped(handle)),
             tx_compressor: Some(tx_compressor),
             tx_writer: Some(tx_writer),
             dictionary: None,
@@ -146,13 +182,27 @@ where
     }
 }
 
+enum MaybeScopedJoinHandle<'scope, T> {
+    Static(JoinHandle<T>),
+    Scoped(ScopedJoinHandle<'scope, T>),
+}
+
+impl<'scope, T> MaybeScopedJoinHandle<'scope, T> {
+    fn join(self) -> Result<T, Box<dyn std::any::Any + Send>> {
+        match self {
+            MaybeScopedJoinHandle::Static(handle) => handle.join(),
+            MaybeScopedJoinHandle::Scoped(handle) => handle.join(),
+        }
+    }
+}
+
 #[allow(unused)]
-pub struct ParCompress<F, W>
+pub struct ParCompress<'scope, F, W>
 where
     F: FormatSpec,
     W: Write,
 {
-    handle: Option<std::thread::JoinHandle<Result<W, GzpError>>>,
+    handle: Option<MaybeScopedJoinHandle<'scope, Result<W, GzpError>>>,
     tx_compressor: Option<Sender<Message<F::C>>>,
     tx_writer: Option<Sender<Receiver<CompressResult<F::C>>>>,
     buffer: BytesMut,
@@ -161,7 +211,7 @@ where
     format: F,
 }
 
-impl<F, W> ParCompress<F, W>
+impl<'scope, F, W> ParCompress<'scope, F, W>
 where
     F: FormatSpec,
     W: Write,
@@ -184,7 +234,7 @@ where
         pin_threads: Option<usize>,
     ) -> Result<W, GzpError>
     where
-        W: Write + Send + 'static,
+        W: Write + Send,
     {
         let (core_ids, pin_threads) = if let Some(core_ids) = core_affinity::get_core_ids() {
             (core_ids, pin_threads)
@@ -291,7 +341,7 @@ where
     }
 }
 
-impl<F, W> ZWriter<W> for ParCompress<F, W>
+impl<'scope, F, W> ZWriter<W> for ParCompress<'scope, F, W>
 where
     F: FormatSpec,
     W: Write,
@@ -317,7 +367,7 @@ where
     }
 }
 
-impl<F, W> Drop for ParCompress<F, W>
+impl<'scope, F, W> Drop for ParCompress<'scope, F, W>
 where
     F: FormatSpec,
     W: Write,
@@ -330,7 +380,7 @@ where
     }
 }
 
-impl<F, W> Write for ParCompress<F, W>
+impl<'scope, F, W> Write for ParCompress<'scope, F, W>
 where
     F: FormatSpec,
     W: Write,

@@ -876,6 +876,43 @@ mod test {
 
     #[test]
     #[cfg(feature = "any_zlib")]
+    fn test_scoped_simple_zlib() {
+        let dir = tempdir().unwrap();
+
+        // Create output file
+        let output_file = dir.path().join("output.txt");
+        let mut out_writer = BufWriter::new(File::create(&output_file).unwrap());
+
+        // Define input bytes
+        let input = b"\
+        This is a longer test than normal to come up with a bunch of text.\n\
+        We'll read just a few lines at a time.\n\
+        ";
+
+        std::thread::scope(|s| {
+            // Compress input to output
+            let mut par_gz: ParCompress<Zlib, _> =
+                ParCompressBuilder::new().from_borrowed_writer(&mut out_writer, s);
+            par_gz.write_all(input).unwrap();
+            par_gz.finish().unwrap();
+        });
+
+        // Read output back in
+        let mut reader = BufReader::new(File::open(output_file).unwrap());
+        let mut result = vec![];
+        reader.read_to_end(&mut result).unwrap();
+
+        // Decompress it
+        let mut gz = ZlibDecoder::new(&result[..]);
+        let mut bytes = vec![];
+        gz.read_to_end(&mut bytes).unwrap();
+
+        // Assert decompressed output is equal to input
+        assert_eq!(input.to_vec(), bytes);
+    }
+
+    #[test]
+    #[cfg(feature = "any_zlib")]
     fn test_simple_zlib_sync() {
         let dir = tempdir().unwrap();
 
