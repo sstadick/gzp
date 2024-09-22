@@ -92,7 +92,7 @@ where
     #[cfg(not(feature = "libdeflate"))]
     compressor: Compress,
     /// The inner writer
-    writer: W,
+    writer: Option<W>,
 }
 
 impl<W> MgzipSyncWriter<W>
@@ -116,8 +116,15 @@ where
             blocksize,
             compression_level,
             compressor,
-            writer,
+            writer: Some(writer),
         }
+    }
+
+    pub(crate) fn finish(mut self) -> io::Result<W> {
+        self.flush()?;
+        self.writer
+            .take()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Writer already taken"))
     }
 }
 
@@ -288,7 +295,7 @@ where
             let b = self.buffer.split_to(self.blocksize).freeze();
             let compressed = compress(&b[..], &mut self.compressor, self.compression_level)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-            self.writer.write_all(&compressed)?;
+            self.writer.as_mut().unwrap().write_all(&compressed)?;
         }
         Ok(buf.len())
     }
@@ -299,9 +306,9 @@ where
         if !b.is_empty() {
             let compressed = compress(&b[..], &mut self.compressor, self.compression_level)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-            self.writer.write_all(&compressed)?;
+            self.writer.as_mut().unwrap().write_all(&compressed)?;
         }
-        self.writer.flush()
+        self.writer.as_mut().unwrap().flush()
     }
 }
 

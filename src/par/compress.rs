@@ -9,7 +9,7 @@
 //! use gzp::{par::compress::{ParCompress, ParCompressBuilder}, deflate::Gzip, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParCompress<Gzip> = ParCompressBuilder::new().from_writer(writer);
+//! let mut parz: ParCompress<Gzip, _> = ParCompressBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
@@ -107,7 +107,7 @@ where
     }
 
     /// Create a configured [`ParCompress`] object.
-    pub fn from_writer<W: Write + Send + 'static>(self, writer: W) -> ParCompress<F> {
+    pub fn from_writer<W: Write + Send + 'static>(self, writer: W) -> ParCompress<F, W> {
         let (tx_compressor, rx_compressor) = bounded(self.num_threads * 2);
         let (tx_writer, rx_writer) = bounded(self.num_threads * 2);
         let buffer_size = self.buffer_size;
@@ -147,11 +147,12 @@ where
 }
 
 #[allow(unused)]
-pub struct ParCompress<F>
+pub struct ParCompress<F, W>
 where
     F: FormatSpec,
+    W: Write,
 {
-    handle: Option<std::thread::JoinHandle<Result<(), GzpError>>>,
+    handle: Option<std::thread::JoinHandle<Result<W, GzpError>>>,
     tx_compressor: Option<Sender<Message<F::C>>>,
     tx_writer: Option<Sender<Receiver<CompressResult<F::C>>>>,
     buffer: BytesMut,
@@ -160,9 +161,10 @@ where
     format: F,
 }
 
-impl<F> ParCompress<F>
+impl<F, W> ParCompress<F, W>
 where
     F: FormatSpec,
+    W: Write,
 {
     /// Create a builder to configure the [`ParCompress`] runtime.
     pub fn builder() -> ParCompressBuilder<F> {
@@ -172,7 +174,7 @@ where
     /// Launch threads to compress chunks and coordinate sending compressed results
     /// to the writer.
     #[allow(clippy::needless_collect)]
-    fn run<W>(
+    fn run(
         rx: &Receiver<Message<F::C>>,
         rx_writer: &Receiver<Receiver<CompressResult<F::C>>>,
         mut writer: W,
@@ -180,7 +182,7 @@ where
         compression_level: Compression,
         format: F,
         pin_threads: Option<usize>,
-    ) -> Result<(), GzpError>
+    ) -> Result<W, GzpError>
     where
         W: Write + Send + 'static,
     {
@@ -245,7 +247,8 @@ where
             .try_for_each(|handle| match handle.join() {
                 Ok(result) => result,
                 Err(e) => std::panic::resume_unwind(e),
-            })
+            })?;
+        Ok(writer)
     }
 
     /// Flush this output stream, ensuring all intermediately buffered contents are sent.
@@ -288,9 +291,10 @@ where
     }
 }
 
-impl<F> ZWriter for ParCompress<F>
+impl<F, W> ZWriter<W> for ParCompress<F, W>
 where
     F: FormatSpec,
+    W: Write,
 {
     /// Flush the buffers and wait on all threads to finish working.
     ///
@@ -299,9 +303,7 @@ where
     /// # Errors
     /// - [`GzpError`] if there is an issue flushing the last blocks or an issue joining on the writer thread
     ///
-    /// # Panics
-    /// - If called twice
-    fn finish(&mut self) -> Result<(), GzpError> {
+    fn finish(&mut self) -> Result<W, GzpError> {
         self.flush_last(true)?;
 
         // while !self.tx_compressor.as_ref().unwrap().is_empty() {}
@@ -315,9 +317,10 @@ where
     }
 }
 
-impl<F> Drop for ParCompress<F>
+impl<F, W> Drop for ParCompress<F, W>
 where
     F: FormatSpec,
+    W: Write,
 {
     fn drop(&mut self) {
         if self.tx_compressor.is_some() && self.tx_writer.is_some() && self.handle.is_some() {
@@ -327,9 +330,10 @@ where
     }
 }
 
-impl<F> Write for ParCompress<F>
+impl<F, W> Write for ParCompress<F, W>
 where
     F: FormatSpec,
+    W: Write,
 {
     /// Write a buffer into this writer, returning how many bytes were written.
     ///
@@ -354,7 +358,7 @@ where
                     // If an error occured sending, that means the recievers have dropped an the compressor thread hit an error
                     // Collect that error here, and if it was an Io error, preserve it
                     let error = match self.handle.take().unwrap().join() {
-                        Ok(result) => result,
+                        Ok(result) => result.map(|_| ()),
                         Err(e) => std::panic::resume_unwind(e),
                     };
                     match error {
@@ -371,7 +375,7 @@ where
                     // If an error occured sending, that means the recievers have dropped an the compressor thread hit an error
                     // Collect that error here, and if it was an Io error, preserve it
                     let error = match self.handle.take().unwrap().join() {
-                        Ok(result) => result,
+                        Ok(result) => result.map(|_| ()),
                         Err(e) => std::panic::resume_unwind(e),
                     };
                     match error {
