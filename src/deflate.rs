@@ -1179,7 +1179,7 @@ mod test {
             if cfg!(not(feature="libdeflate")) {
                 if comp_level < 3 {
                     comp_level = 3;
-                } 
+                }
             }
 
             // Compress input to output
@@ -1233,7 +1233,7 @@ mod test {
             if cfg!(not(feature="libdeflate")) {
                 if comp_level < 3 {
                     comp_level = 3;
-                } 
+                }
             }
             // Compress input to output
             let mut par_gz = ZBuilder::<Bgzf, _>::new()

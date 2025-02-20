@@ -115,23 +115,15 @@ impl Check for Adler32 {
         // TODO: safer cast(s)?
         self.amount += bytes.len() as u32;
         self.sum = unsafe {
-            libz_ng_sys::adler32(
-                self.sum,
-                bytes.as_ptr() as *mut _,
-                bytes.len() as uInt,
-            )
+            libz_ng_sys::adler32(self.sum, bytes.as_ptr() as *mut _, bytes.len() as uInt)
         } as u32;
     }
 
     #[inline]
     fn combine(&mut self, other: &Self) {
-        self.sum = unsafe {
-            libz_ng_sys::adler32_combine(
-                self.sum,
-                other.sum,
-                other.amount as z_off_t,
-            )
-        } as u32;
+        self.sum =
+            unsafe { libz_ng_sys::adler32_combine(self.sum, other.sum, other.amount as z_off_t) }
+                as u32;
         self.amount += other.amount;
     }
 }
