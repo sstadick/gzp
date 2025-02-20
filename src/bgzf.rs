@@ -41,7 +41,10 @@ pub(crate) const BGZF_HEADER_SIZE: usize = 18;
 #[cfg(feature = "libdeflate")]
 pub(crate) const BGZF_FOOTER_SIZE: usize = 8;
 
+#[cfg(feature = "libdeflate")]
 const EXTRA: f64 = 0.1;
+#[cfg(not(feature = "libdeflate"))]
+const EXTRA: f64 = 0.2;
 
 #[inline]
 fn extra_amount(input_len: usize) -> usize {

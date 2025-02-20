@@ -23,6 +23,7 @@ use std::{
 use bytes::{Bytes, BytesMut};
 pub use flate2::Compression;
 use flume::{bounded, Receiver, Sender};
+use log::warn;
 
 use crate::check::Check;
 use crate::{CompressResult, FormatSpec, GzpError, Message, ZWriter, DICT_SIZE};
@@ -96,7 +97,12 @@ where
 
     /// Set the [`pin_threads`](ParCompressBuilder.pin_threads).
     pub fn pin_threads(mut self, pin_threads: Option<usize>) -> Self {
-        self.pin_threads = pin_threads;
+        if core_affinity::get_core_ids().is_none() {
+            warn!("Pinning threads is not supported on your platform. Please see core_affinity_rs. No threads will be pinned, but everything will work.");
+            self.pin_threads = None;
+        } else {
+            self.pin_threads = pin_threads;
+        }
         self
     }
 
@@ -178,7 +184,13 @@ where
     where
         W: Write + Send + 'static,
     {
-        let core_ids = core_affinity::get_core_ids().unwrap();
+        let (core_ids, pin_threads) = if let Some(core_ids) = core_affinity::get_core_ids() {
+            (core_ids, pin_threads)
+        } else {
+            // Handle the case where core affinity doesn't work for a platform.
+            // We test and warn in the constructors for this case, so no warning should be needed here.
+            (vec![], None)
+        };
         let handles: Vec<JoinHandle<Result<(), GzpError>>> = (0..num_threads)
             .map(|i| {
                 let rx = rx.clone();

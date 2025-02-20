@@ -1,3 +1,10 @@
+# v1.0.0
+
+- chore: Upgrade all deps to latest
+- fix: Mitigate [failures](https://github.com/sstadick/gzp/issues/58) in core_affinity_rs
+- feat: Migrate to zlib-ng instead of zlib-ng-compat from @camlloyd [PR](https://github.com/sstadick/gzp/pull/54)
+- fix: non-libdeflate bgzf tests failing due to worse compression resulting in buffers larger than BGZF max.
+
 # v0.10.1
 
 - This release makes bgzf, mgzip, and the `FooterValues.sum` value public
