@@ -261,7 +261,7 @@ where
                 .buffer
                 .split_to(std::cmp::min(self.buffer.len(), self.buffer_size))
                 .freeze();
-            let (mut m, r) = Message::new_parts(b, std::mem::replace(&mut self.dictionary, None));
+            let (mut m, r) = Message::new_parts(b, self.dictionary.take());
             if is_last && self.buffer.is_empty() {
                 m.is_last = true;
             }
@@ -339,7 +339,7 @@ where
         self.buffer.extend_from_slice(buf);
         while self.buffer.len() > self.buffer_size {
             let b = self.buffer.split_to(self.buffer_size).freeze();
-            let (m, r) = Message::new_parts(b, std::mem::replace(&mut self.dictionary, None));
+            let (m, r) = Message::new_parts(b, self.dictionary.take());
             // Bytes uses and ARC, this is O(1) to get the last 32k bytes from teh previous chunk
             self.dictionary = if self.format.needs_dict() {
                 Some(m.buffer.slice(m.buffer.len() - DICT_SIZE..))
