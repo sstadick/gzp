@@ -11,7 +11,7 @@
 #[cfg(feature = "deflate")]
 use flate2::Crc;
 #[cfg(feature = "any_zlib")]
-use libz_sys::{uInt, uLong, z_off_t};
+use libz_ng_sys::{uInt, z_off_t};
 
 pub trait Check {
     /// Current checksum
@@ -102,7 +102,7 @@ impl Check for Adler32 {
 
     #[inline]
     fn new() -> Self {
-        let start = unsafe { libz_sys::adler32(0, std::ptr::null_mut(), 0) } as u32;
+        let start = unsafe { libz_ng_sys::adler32(0, std::ptr::null_mut(), 0) } as u32;
 
         Self {
             sum: start,
@@ -115,8 +115,8 @@ impl Check for Adler32 {
         // TODO: safer cast(s)?
         self.amount += bytes.len() as u32;
         self.sum = unsafe {
-            libz_sys::adler32(
-                self.sum as uLong,
+            libz_ng_sys::adler32(
+                self.sum,
                 bytes.as_ptr() as *mut _,
                 bytes.len() as uInt,
             )
@@ -126,9 +126,9 @@ impl Check for Adler32 {
     #[inline]
     fn combine(&mut self, other: &Self) {
         self.sum = unsafe {
-            libz_sys::adler32_combine(
-                self.sum as uLong,
-                other.sum as uLong,
+            libz_ng_sys::adler32_combine(
+                self.sum,
+                other.sum,
                 other.amount as z_off_t,
             )
         } as u32;

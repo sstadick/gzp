@@ -53,6 +53,8 @@ gzp = { version = "*", default-features = false, features = ["deflate_rust"] }
 gzp = { version = "*", default-features = false, features = ["snap_default"] }
 ```
 
+**Note**: if you are running into compilation issues with libdeflate and the `i686-pc-windows-msvc` target, please see [this](https://github.com/sstadick/gzp/issues/18) issue for workarounds.
+
 ## Examples
 
 Simple example
