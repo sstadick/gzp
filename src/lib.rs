@@ -81,6 +81,7 @@ use bytes::Bytes;
 pub use flate2::Compression;
 use flate2::DecompressError;
 use flume::{unbounded, Receiver, Sender};
+use log::warn;
 use thiserror::Error;
 
 use crate::check::Check;
@@ -115,7 +116,7 @@ pub enum GzpError {
     #[error("Invalid buffer size ({0}), must be >= {1}")]
     BufferSize(usize, usize),
 
-    #[error("Compressed block size ({0}) exceeds max allowed: ({1})")]
+    #[error("Compressed block size ({0}) exceeds max allowed: ({1}), try increasing compression.")]
     BlockSizeExceeded(usize, usize),
 
     #[error("Failed to send over channel.")]
@@ -218,7 +219,12 @@ where
 
     /// Whether or not to pin compression threads and which physical CPU to start pinning at.
     pub fn pin_threads(mut self, pin_threads: Option<usize>) -> Self {
-        self.pin_threads = pin_threads;
+        if core_affinity::get_core_ids().is_none() {
+            warn!("Pinning threads is not supported on your platform. Please see core_affinity_rs. No threads will be pinned, but everything will work.");
+            self.pin_threads = None;
+        } else {
+            self.pin_threads = pin_threads;
+        }
         self
     }
 

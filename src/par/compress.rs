@@ -23,6 +23,7 @@ use std::{
 use bytes::{Bytes, BytesMut};
 pub use flate2::Compression;
 use flume::{bounded, Receiver, Sender};
+use log::warn;
 
 use crate::check::Check;
 use crate::{CompressResult, FormatSpec, GzpError, Message, ZWriter, DICT_SIZE};
@@ -96,7 +97,12 @@ where
 
     /// Set the [`pin_threads`](ParCompressBuilder.pin_threads).
     pub fn pin_threads(mut self, pin_threads: Option<usize>) -> Self {
-        self.pin_threads = pin_threads;
+        if core_affinity::get_core_ids().is_none() {
+            warn!("Pinning threads is not supported on your platform. Please see core_affinity_rs. No threads will be pinned, but everything will work.");
+            self.pin_threads = None;
+        } else {
+            self.pin_threads = pin_threads;
+        }
         self
     }
 
@@ -178,7 +184,13 @@ where
     where
         W: Write + Send + 'static,
     {
-        let core_ids = core_affinity::get_core_ids().unwrap();
+        let (core_ids, pin_threads) = if let Some(core_ids) = core_affinity::get_core_ids() {
+            (core_ids, pin_threads)
+        } else {
+            // Handle the case where core affinity doesn't work for a platform.
+            // We test and warn in the constructors for this case, so no warning should be needed here.
+            (vec![], None)
+        };
         let handles: Vec<JoinHandle<Result<(), GzpError>>> = (0..num_threads)
             .map(|i| {
                 let rx = rx.clone();
@@ -249,7 +261,7 @@ where
                 .buffer
                 .split_to(std::cmp::min(self.buffer.len(), self.buffer_size))
                 .freeze();
-            let (mut m, r) = Message::new_parts(b, std::mem::replace(&mut self.dictionary, None));
+            let (mut m, r) = Message::new_parts(b, self.dictionary.take());
             if is_last && self.buffer.is_empty() {
                 m.is_last = true;
             }
@@ -327,7 +339,7 @@ where
         self.buffer.extend_from_slice(buf);
         while self.buffer.len() > self.buffer_size {
             let b = self.buffer.split_to(self.buffer_size).freeze();
-            let (m, r) = Message::new_parts(b, std::mem::replace(&mut self.dictionary, None));
+            let (m, r) = Message::new_parts(b, self.dictionary.take());
             // Bytes uses and ARC, this is O(1) to get the last 32k bytes from teh previous chunk
             self.dictionary = if self.format.needs_dict() {
                 Some(m.buffer.slice(m.buffer.len() - DICT_SIZE..))
