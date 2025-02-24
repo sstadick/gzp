@@ -12,7 +12,7 @@ mod example {
         let chunksize = 64 * (1 << 10) * 2;
 
         let stdout = std::io::stdout();
-        let mut writer: ParCompress<Gzip> = ParCompressBuilder::new()
+        let mut writer: ParCompress<Gzip, _> = ParCompressBuilder::new()
             .compression_level(Compression::new(6))
             .from_writer(stdout);
 

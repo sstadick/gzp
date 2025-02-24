@@ -29,7 +29,7 @@
 //! use gzp::{deflate::Gzip, par::compress::{ParCompress, ParCompressBuilder}, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParCompress<Gzip> = ParCompressBuilder::new().from_writer(writer);
+//! let mut parz: ParCompress<Gzip, _> = ParCompressBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
@@ -163,9 +163,10 @@ pub enum GzpError {
 }
 
 /// Trait that unifies sync and async writer
-pub trait ZWriter: Write {
-    /// Cleans up resources, writes footers
-    fn finish(&mut self) -> Result<(), GzpError>;
+pub trait ZWriter<W>: Write {
+    /// Cleans up resources, writes footers,
+    /// and returns the underlying writer.
+    fn finish(&mut self) -> Result<W, GzpError>;
 }
 
 /// Create a synchronous writer wrapping the input `W` type.
@@ -238,9 +239,9 @@ where
 
     /// Create a [`ZWriter`] trait object from a writer.
     #[allow(clippy::missing_panics_doc)]
-    pub fn from_writer(self, writer: W) -> Box<dyn ZWriter>
+    pub fn from_writer(self, writer: W) -> Box<dyn ZWriter<W>>
     where
-        SyncZ<<F as SyncWriter<W>>::OutputWriter>: ZWriter + Send,
+        SyncZ<<F as SyncWriter<W>>::OutputWriter>: ZWriter<W> + Send,
     {
         if self.num_threads > 1 {
             Box::new(
