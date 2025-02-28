@@ -1,3 +1,7 @@
+# v1.0.1
+
+- chore: update core-affinity to 0.8.2 for NetBSD support
+
 # v1.0.0
 
 - chore: Upgrade all deps to latest
