@@ -138,6 +138,27 @@ where
     }
 
     /// Create a configured [`ParCompress`] object.
+    ///
+    /// This is similar to [`from_writer`](ParCompressBuilder::from_writer) but allows
+    /// the writer to be borrowed for the lifetime of the specified scope, rather than
+    /// requiring it to be `'static`.
+    ///
+    /// ```rust
+    /// use gzp::par::compress::ParCompressBuilder;
+    /// use gzp::deflate::Gzip;
+    /// use gzp::ZWriter;
+    /// use std::io::Write;
+    ///
+    /// let mut output = Vec::new();
+    ///
+    /// std::thread::scope(|scope| {
+    ///     let mut compressor = ParCompressBuilder::<Gzip>::new()
+    ///         .from_borrowed_writer(&mut output, scope);
+    ///     
+    ///     compressor.write_all(b"Data to compress").unwrap();
+    ///     compressor.finish().unwrap()
+    /// });
+    /// ````
     pub fn from_borrowed_writer<'scope, 'env, W: Write + Send + 'scope>(
         self,
         writer: W,
