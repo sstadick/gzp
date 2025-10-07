@@ -302,13 +302,16 @@ where
 
     /// Flush this output stream, ensuring all intermediately buffered contents are sent.
     fn flush(&mut self) -> std::io::Result<()> {
-        let b = self.buffer.split_to(self.buffer.len()).freeze();
-        if !b.is_empty() {
-            let compressed = compress(&b[..], &mut self.compressor, self.compression_level)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-            self.writer.as_mut().unwrap().write_all(&compressed)?;
+        if let Some(writer) = self.writer.as_mut() {
+            let b = self.buffer.split_to(self.buffer.len()).freeze();
+            if !b.is_empty() {
+                let compressed = compress(&b[..], &mut self.compressor, self.compression_level)
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                writer.write_all(&compressed)?;
+            }
+            writer.flush()?;
         }
-        self.writer.as_mut().unwrap().flush()
+        Ok(())
     }
 }
 
@@ -317,7 +320,7 @@ where
     W: Write,
 {
     fn drop(&mut self) {
-        self.flush().unwrap();
+        let _ = self.flush();
     }
 }
 
