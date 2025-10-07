@@ -108,7 +108,7 @@ where
     #[cfg(not(feature = "libdeflate"))]
     compressor: Compress,
     /// The inner writer
-    writer: W,
+    writer: Option<W>,
 }
 
 impl<W> BgzfSyncWriter<W>
@@ -133,8 +133,15 @@ where
             blocksize,
             compression_level,
             compressor,
-            writer,
+            writer: Some(writer),
         }
+    }
+
+    pub(crate) fn finish(mut self) -> io::Result<W> {
+        self.flush()?;
+        self.writer
+            .take()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Writer already taken"))
     }
 }
 
@@ -318,24 +325,27 @@ where
             let b = self.buffer.split_to(self.blocksize).freeze();
             let compressed = compress(&b[..], &mut self.compressor, self.compression_level)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-            self.writer.write_all(&compressed)?;
+            self.writer.as_mut().unwrap().write_all(&compressed)?;
         }
         Ok(buf.len())
     }
 
     /// Flush this output stream, ensuring all intermediately buffered contents are sent.
     fn flush(&mut self) -> std::io::Result<()> {
-        while !self.buffer.is_empty() {
-            let b = self
-                .buffer
-                .split_to(std::cmp::min(self.buffer.len(), BGZF_BLOCK_SIZE))
-                .freeze();
-            let compressed = compress(&b[..], &mut self.compressor, self.compression_level)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-            self.writer.write_all(&compressed)?;
-            self.writer.write_all(BGZF_EOF)?; // this is an empty block
+        if let Some(writer) = self.writer.as_mut() {
+            while !self.buffer.is_empty() {
+                let b = self
+                    .buffer
+                    .split_to(std::cmp::min(self.buffer.len(), BGZF_BLOCK_SIZE))
+                    .freeze();
+                let compressed = compress(&b[..], &mut self.compressor, self.compression_level)
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                writer.write_all(&compressed)?;
+                writer.write_all(BGZF_EOF)?; // this is an empty block
+            }
+            writer.flush()?;
         }
-        self.writer.flush()
+        Ok(())
     }
 }
 
@@ -344,7 +354,7 @@ where
     W: Write,
 {
     fn drop(&mut self) {
-        self.flush().unwrap();
+        let _ = self.flush();
     }
 }
 

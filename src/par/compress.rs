@@ -9,7 +9,7 @@
 //! use gzp::{par::compress::{ParCompress, ParCompressBuilder}, deflate::Gzip, ZWriter};
 //!
 //! let mut writer = vec![];
-//! let mut parz: ParCompress<Gzip> = ParCompressBuilder::new().from_writer(writer);
+//! let mut parz: ParCompress<Gzip, _> = ParCompressBuilder::new().from_writer(writer);
 //! parz.write_all(b"This is a first test line\n").unwrap();
 //! parz.write_all(b"This is a second test line\n").unwrap();
 //! parz.finish().unwrap();
@@ -17,7 +17,7 @@
 //! ```
 use std::{
     io::{self, Write},
-    thread::JoinHandle,
+    thread::{JoinHandle, Scope, ScopedJoinHandle},
 };
 
 use bytes::{Bytes, BytesMut};
@@ -107,26 +107,83 @@ where
     }
 
     /// Create a configured [`ParCompress`] object.
-    pub fn from_writer<W: Write + Send + 'static>(self, writer: W) -> ParCompress<F> {
+    pub fn from_writer<W: Write + Send + 'static>(self, writer: W) -> ParCompress<'static, F, W> {
         let (tx_compressor, rx_compressor) = bounded(self.num_threads * 2);
         let (tx_writer, rx_writer) = bounded(self.num_threads * 2);
         let buffer_size = self.buffer_size;
         let comp_level = self.compression_level;
         let pin_threads = self.pin_threads;
         let format = self.format;
+        let num_threads = self.num_threads;
         let handle = std::thread::spawn(move || {
             ParCompress::run(
                 &rx_compressor,
                 &rx_writer,
                 writer,
-                self.num_threads,
+                num_threads,
                 comp_level,
                 format,
                 pin_threads,
             )
         });
         ParCompress {
-            handle: Some(handle),
+            handle: Some(MaybeScopedJoinHandle::Static(handle)),
+            tx_compressor: Some(tx_compressor),
+            tx_writer: Some(tx_writer),
+            dictionary: None,
+            buffer: BytesMut::with_capacity(buffer_size),
+            buffer_size,
+            format,
+        }
+    }
+
+    /// Create a configured [`ParCompress`] object.
+    ///
+    /// This is similar to [`from_writer`](ParCompressBuilder::from_writer) but allows
+    /// the writer to be borrowed for the lifetime of the specified scope, rather than
+    /// requiring it to be `'static`.
+    ///
+    /// ```rust
+    /// use gzp::par::compress::ParCompressBuilder;
+    /// use gzp::deflate::Gzip;
+    /// use gzp::ZWriter;
+    /// use std::io::Write;
+    ///
+    /// let mut output = Vec::new();
+    ///
+    /// std::thread::scope(|scope| {
+    ///     let mut compressor = ParCompressBuilder::<Gzip>::new()
+    ///         .from_borrowed_writer(&mut output, scope);
+    ///     
+    ///     compressor.write_all(b"Data to compress").unwrap();
+    ///     compressor.finish().unwrap()
+    /// });
+    /// ````
+    pub fn from_borrowed_writer<'scope, 'env, W: Write + Send + 'scope>(
+        self,
+        writer: W,
+        scope: &'scope Scope<'scope, 'env>,
+    ) -> ParCompress<'scope, F, W> {
+        let (tx_compressor, rx_compressor) = bounded(self.num_threads * 2);
+        let (tx_writer, rx_writer) = bounded(self.num_threads * 2);
+        let buffer_size = self.buffer_size;
+        let comp_level = self.compression_level;
+        let pin_threads = self.pin_threads;
+        let format = self.format;
+        let num_threads = self.num_threads;
+        let handle = scope.spawn(move || {
+            ParCompress::run(
+                &rx_compressor,
+                &rx_writer,
+                writer,
+                num_threads,
+                comp_level,
+                format,
+                pin_threads,
+            )
+        });
+        ParCompress {
+            handle: Some(MaybeScopedJoinHandle::Scoped(handle)),
             tx_compressor: Some(tx_compressor),
             tx_writer: Some(tx_writer),
             dictionary: None,
@@ -146,12 +203,27 @@ where
     }
 }
 
+enum MaybeScopedJoinHandle<'scope, T> {
+    Static(JoinHandle<T>),
+    Scoped(ScopedJoinHandle<'scope, T>),
+}
+
+impl<'scope, T> MaybeScopedJoinHandle<'scope, T> {
+    fn join(self) -> Result<T, Box<dyn std::any::Any + Send>> {
+        match self {
+            MaybeScopedJoinHandle::Static(handle) => handle.join(),
+            MaybeScopedJoinHandle::Scoped(handle) => handle.join(),
+        }
+    }
+}
+
 #[allow(unused)]
-pub struct ParCompress<F>
+pub struct ParCompress<'scope, F, W>
 where
     F: FormatSpec,
+    W: Write,
 {
-    handle: Option<std::thread::JoinHandle<Result<(), GzpError>>>,
+    handle: Option<MaybeScopedJoinHandle<'scope, Result<W, GzpError>>>,
     tx_compressor: Option<Sender<Message<F::C>>>,
     tx_writer: Option<Sender<Receiver<CompressResult<F::C>>>>,
     buffer: BytesMut,
@@ -160,9 +232,10 @@ where
     format: F,
 }
 
-impl<F> ParCompress<F>
+impl<'scope, F, W> ParCompress<'scope, F, W>
 where
     F: FormatSpec,
+    W: Write,
 {
     /// Create a builder to configure the [`ParCompress`] runtime.
     pub fn builder() -> ParCompressBuilder<F> {
@@ -172,7 +245,7 @@ where
     /// Launch threads to compress chunks and coordinate sending compressed results
     /// to the writer.
     #[allow(clippy::needless_collect)]
-    fn run<W>(
+    fn run(
         rx: &Receiver<Message<F::C>>,
         rx_writer: &Receiver<Receiver<CompressResult<F::C>>>,
         mut writer: W,
@@ -180,9 +253,9 @@ where
         compression_level: Compression,
         format: F,
         pin_threads: Option<usize>,
-    ) -> Result<(), GzpError>
+    ) -> Result<W, GzpError>
     where
-        W: Write + Send + 'static,
+        W: Write + Send,
     {
         let (core_ids, pin_threads) = if let Some(core_ids) = core_affinity::get_core_ids() {
             (core_ids, pin_threads)
@@ -245,7 +318,8 @@ where
             .try_for_each(|handle| match handle.join() {
                 Ok(result) => result,
                 Err(e) => std::panic::resume_unwind(e),
-            })
+            })?;
+        Ok(writer)
     }
 
     /// Flush this output stream, ensuring all intermediately buffered contents are sent.
@@ -288,9 +362,10 @@ where
     }
 }
 
-impl<F> ZWriter for ParCompress<F>
+impl<'scope, F, W> ZWriter<W> for ParCompress<'scope, F, W>
 where
     F: FormatSpec,
+    W: Write,
 {
     /// Flush the buffers and wait on all threads to finish working.
     ///
@@ -299,9 +374,7 @@ where
     /// # Errors
     /// - [`GzpError`] if there is an issue flushing the last blocks or an issue joining on the writer thread
     ///
-    /// # Panics
-    /// - If called twice
-    fn finish(&mut self) -> Result<(), GzpError> {
+    fn finish(&mut self) -> Result<W, GzpError> {
         self.flush_last(true)?;
 
         // while !self.tx_compressor.as_ref().unwrap().is_empty() {}
@@ -315,9 +388,10 @@ where
     }
 }
 
-impl<F> Drop for ParCompress<F>
+impl<'scope, F, W> Drop for ParCompress<'scope, F, W>
 where
     F: FormatSpec,
+    W: Write,
 {
     fn drop(&mut self) {
         if self.tx_compressor.is_some() && self.tx_writer.is_some() && self.handle.is_some() {
@@ -327,9 +401,10 @@ where
     }
 }
 
-impl<F> Write for ParCompress<F>
+impl<'scope, F, W> Write for ParCompress<'scope, F, W>
 where
     F: FormatSpec,
+    W: Write,
 {
     /// Write a buffer into this writer, returning how many bytes were written.
     ///
@@ -354,7 +429,7 @@ where
                     // If an error occured sending, that means the recievers have dropped an the compressor thread hit an error
                     // Collect that error here, and if it was an Io error, preserve it
                     let error = match self.handle.take().unwrap().join() {
-                        Ok(result) => result,
+                        Ok(result) => result.map(|_| ()),
                         Err(e) => std::panic::resume_unwind(e),
                     };
                     match error {
@@ -371,7 +446,7 @@ where
                     // If an error occured sending, that means the recievers have dropped an the compressor thread hit an error
                     // Collect that error here, and if it was an Io error, preserve it
                     let error = match self.handle.take().unwrap().join() {
-                        Ok(result) => result,
+                        Ok(result) => result.map(|_| ()),
                         Err(e) => std::panic::resume_unwind(e),
                     };
                     match error {

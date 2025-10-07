@@ -8,7 +8,7 @@ mod example {
     pub fn main() {
         let file = env::args().skip(1).next().unwrap();
         let writer = File::create(file).unwrap();
-        let mut parz: ParCompress<Gzip> = ParCompressBuilder::new().from_writer(writer);
+        let mut parz: ParCompress<Gzip, _> = ParCompressBuilder::new().from_writer(writer);
         parz.write_all(b"This is a first test line\n").unwrap();
         parz.write_all(b"This is a second test line\n").unwrap();
         parz.finish().unwrap();

@@ -1,3 +1,7 @@
+# unreleased
+
+- feat: Add `ParCompress::from_borrowed_writer` to support compression when the inner writer borrows data for the lifetime of a specific scope
+
 # v1.0.1
 
 - chore: update core-affinity to 0.8.2 for NetBSD support
