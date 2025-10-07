@@ -124,7 +124,7 @@ where
         self.flush()?;
         self.writer
             .take()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Writer already taken"))
+            .ok_or_else(|| io::Error::other("Writer already taken"))
     }
 }
 
@@ -294,7 +294,7 @@ where
         if self.buffer.len() >= self.blocksize {
             let b = self.buffer.split_to(self.blocksize).freeze();
             let compressed = compress(&b[..], &mut self.compressor, self.compression_level)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                .map_err(io::Error::other)?;
             self.writer.as_mut().unwrap().write_all(&compressed)?;
         }
         Ok(buf.len())
@@ -306,7 +306,7 @@ where
             let b = self.buffer.split_to(self.buffer.len()).freeze();
             if !b.is_empty() {
                 let compressed = compress(&b[..], &mut self.compressor, self.compression_level)
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                    .map_err(io::Error::other)?;
                 writer.write_all(&compressed)?;
             }
             writer.flush()?;

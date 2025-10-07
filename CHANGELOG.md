@@ -1,6 +1,7 @@
-# unreleased
+# v2.0.0
 
 - feat: Add `ParCompress::from_borrowed_writer` to support compression when the inner writer borrows data for the lifetime of a specific scope
+- chore: Upgraded deps and pinned rust version to 1.81
 
 # v1.0.1
 
@@ -47,7 +48,7 @@
 
 # v0.9.0
 
-- Fix [crabz issue 9](https://github.com/sstadick/crabz/issues/11)             
+- Fix [crabz issue 9](https://github.com/sstadick/crabz/issues/11)
 - Add ability to pin compression and decompression threads to specific cpus
 - Added Single threaded decompression for Bgzf and Mgzip formats backed by libdeflate
 
@@ -98,7 +99,7 @@ This release brings performance improvements across the board, but especially fo
 Driven by [PR12](https://github.com/sstadick/gzp/pull/12) / [Issue11](https://github.com/sstadick/gzp/issues/11)
 
 - Change backend to use thread-per-core compressors, dropping rayon
-- Change meaning of `num_threads` to mean "number of compression threads", which allows for oversubscribing the writer thread since it spends most of its time idle. 
+- Change meaning of `num_threads` to mean "number of compression threads", which allows for oversubscribing the writer thread since it spends most of its time idle.
 - Added errors for misconfigurations of number of threads / buffer size
 - Bugfix to correctly set the compression dictionary in the event of an early call to flush
 - Improved docs
