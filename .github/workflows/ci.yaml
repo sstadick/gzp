@@ -18,7 +18,6 @@ jobs:
         with:
           profile: minimal
           toolchain: stable
-          override: true
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v1
@@ -41,7 +40,6 @@ jobs:
         with:
           profile: minimal
           toolchain: stable
-          override: true
           components: rustfmt, clippy
 
       - name: Cache dependencies
@@ -74,7 +72,6 @@ jobs:
         with:
           profile: minimal
           toolchain: stable
-          override: true
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v1
