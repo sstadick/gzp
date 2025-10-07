@@ -348,12 +348,12 @@ where
                 .as_ref()
                 .unwrap()
                 .send(r)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                .map_err(io::Error::other)?;
             self.tx_compressor
                 .as_ref()
                 .unwrap()
                 .send(m)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                .map_err(io::Error::other)?;
             if self.buffer.is_empty() {
                 break;
             }
@@ -435,7 +435,7 @@ where
                     match error {
                         Ok(()) => std::panic::resume_unwind(Box::new(error)), // something weird happened
                         Err(GzpError::Io(ioerr)) => ioerr,
-                        Err(err) => io::Error::new(io::ErrorKind::Other, err),
+                        Err(err) => io::Error::other(err),
                     }
                 })?;
             self.tx_compressor
@@ -452,7 +452,7 @@ where
                     match error {
                         Ok(()) => std::panic::resume_unwind(Box::new(error)), // something weird happened
                         Err(GzpError::Io(ioerr)) => ioerr,
-                        Err(err) => io::Error::new(io::ErrorKind::Other, err),
+                        Err(err) => io::Error::other(err),
                     }
                 })?;
             self.buffer

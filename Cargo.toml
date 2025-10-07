@@ -43,23 +43,23 @@ snappy = []
 any_zlib = ["flate2/any_zlib"]
 
 [dependencies]
-bytes = "1.10.0"
-num_cpus = "1.16.0"
-thiserror = "2.0.11"
+bytes = "1.10.1"
+num_cpus = "1.17.0"
+thiserror = "2.0.17"
 flume = "0.11.1"
 byteorder = "1.5.0"
-flate2 = { version = "1.0.35", default-features = false, optional = true }
-libdeflater = { version = "1.23.0", optional = true }
-libz-sys = { version = "1.1.21", default-features = false, optional = true }
+flate2 = { version = "1.1.4", default-features = false, optional = true }
+libdeflater = { version = "1.24.0", optional = true }
+libz-sys = { version = "1.1.22", default-features = false, optional = true }
 snap = { version = "1.1.1", optional = true }
-core_affinity = "0.8.2"
-libz-ng-sys = "1.1.21"
-log = "0.4.25"
+core_affinity = "0.8.3"
+libz-ng-sys = "1.1.22"
+log = "0.4.28"
 
 [dev-dependencies]
-proptest = "1.6.0"
-tempfile = "3.17.1"
-criterion = "0.5.1"
+proptest = "1.8.0"
+tempfile = "3.23.0"
+criterion = "0.7.0"
 
 [[bench]]
 name = "bench"

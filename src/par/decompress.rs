@@ -300,7 +300,7 @@ where
                                         break;
                                     } // finished reading file
                                     Err(GzpError::Io(ioerr)) => ioerr,
-                                    Err(err) => io::Error::new(io::ErrorKind::Other, err),
+                                    Err(err) => io::Error::other(err),
                                 };
                                 self.rx_reader.take();
                                 return Err(err);
@@ -322,7 +322,7 @@ where
                                 break;
                             } // finished reading file
                             Err(GzpError::Io(ioerr)) => ioerr,
-                            Err(err) => io::Error::new(io::ErrorKind::Other, err),
+                            Err(err) => io::Error::other(err),
                         };
                         self.rx_reader.take();
                         return Err(err);
