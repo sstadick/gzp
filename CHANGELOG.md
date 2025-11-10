@@ -1,3 +1,7 @@
+# v2.0.1
+
+- fix: https://github.com/sstadick/gzp/issues/65, correctly feature gate libz-ng-sys behind deflate_zlib_ng
+
 # v2.0.0
 
 - feat: Add `ParCompress::from_borrowed_writer` to support compression when the inner writer borrows data for the lifetime of a specific scope
