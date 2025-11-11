@@ -1,7 +1,7 @@
 [package]
 name = "gzp"
 authors = ["Seth Stadick <sstadick@gmail.com>"]
-version = "1.0.1"
+version = "2.0.1"
 edition = "2018"
 license = "Unlicense/MIT"
 readme = "README.md"
@@ -34,7 +34,7 @@ deflate_zlib = [
     "libz-sys",
     "libz-sys/libc",
 ]
-deflate_zlib_ng = ["deflate", "flate2/zlib-ng", "any_zlib"]
+deflate_zlib_ng = ["deflate", "flate2/zlib-ng", "any_zlib", "libz-ng-sys"]
 
 # Feature flags used internally
 deflate = []
@@ -51,9 +51,9 @@ byteorder = "1.5.0"
 flate2 = { version = "1.1.4", default-features = false, optional = true }
 libdeflater = { version = "1.24.0", optional = true }
 libz-sys = { version = "1.1.22", default-features = false, optional = true }
+libz-ng-sys = { version = "1.1.22", optional = true }
 snap = { version = "1.1.1", optional = true }
 core_affinity = "0.8.3"
-libz-ng-sys = "1.1.22"
 log = "0.4.28"
 
 [dev-dependencies]

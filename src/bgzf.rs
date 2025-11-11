@@ -178,8 +178,6 @@ pub fn decompress(
     output: &mut [u8],
     footer_vals: FooterValues,
 ) -> Result<(), GzpError> {
-    use flate2::Crc;
-
     if footer_vals.amount != 0 {
         let _bytes_decompressed = decoder.decompress(
             &input[..input.len() - 8],
