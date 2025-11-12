@@ -1,3 +1,7 @@
+# v2.0.2
+
+- fix: https://github.com/sstadick/gzp/issues/65, incorrect feature flags that get exposed when compiling without default features for snappy only.
+
 # v2.0.1
 
 - fix: https://github.com/sstadick/gzp/issues/65, correctly feature gate libz-ng-sys behind deflate_zlib_ng
