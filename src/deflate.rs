@@ -774,6 +774,99 @@ mod test {
         assert_eq!(input.to_vec(), bytes);
     }
 
+    /// A sink where every write fails, standing in for a full disk or a pipe that has
+    /// gone away. It signals on drop, which happens on the writer thread as that thread
+    /// unwinds out of `run`, so a test can wait for the failure rather than sleep on it.
+    #[derive(Debug)]
+    struct FailingSink(std::sync::mpsc::Sender<()>);
+
+    impl Write for FailingSink {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("sink is gone"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Drop for FailingSink {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+
+    /// Build a writer over a [`FailingSink`] and return once the writer thread has died
+    /// on the gzip header, which is the first thing it writes.
+    ///
+    /// Nothing here is written by the caller, which removes the race: the only sends in
+    /// the test are the teardown's own.
+    fn dead_writer_thread() -> ParCompress<'static, Gzip, FailingSink> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let par_gz: ParCompress<Gzip, _> = ParCompressBuilder::new()
+            .num_threads(1)
+            .unwrap()
+            .from_writer(FailingSink(tx));
+
+        // The sink is dropped as the writer thread returns, so this wakes up once that
+        // thread is on its way out rather than after a guessed-at duration. The channels
+        // it receives on are closed a few instructions later, when the closure holding
+        // them is dropped; that is what the pause covers. Both tests below still assert
+        // correctly if it is not long enough on some machine -- see their comments.
+        rx.recv_timeout(std::time::Duration::from_secs(60))
+            .expect("the writer thread should have failed on the gzip header");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        par_gz
+    }
+
+    #[test]
+    fn test_finish_error_does_not_panic_on_drop() {
+        let mut par_gz = dead_writer_thread();
+
+        let err = par_gz
+            .finish()
+            .expect_err("finish() should report the sink's failure");
+
+        // The writer thread was joined on the way out, so the caller gets the error the
+        // sink actually returned rather than the send failure it caused.
+        assert!(
+            matches!(&err, GzpError::Io(ioerr) if ioerr.to_string().contains("sink is gone")),
+            "expected the sink's own error, got {:?}",
+            err
+        );
+
+        // The drop at the end of this scope is the regression: it must not re-enter
+        // finish() and unwrap the same error.
+        //
+        // If the channels have not closed yet, finish()'s sends succeed and it reports
+        // the same error from the join instead -- so this test cannot fail spuriously,
+        // it can only stop covering the send path.
+    }
+
+    #[test]
+    fn test_flush_error_does_not_panic_on_drop() {
+        let mut par_gz = dead_writer_thread();
+
+        // flush() is the other way into flush_last. Retry rather than assume the
+        // channels have closed: the writer thread is already dead, so this terminates.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let err = loop {
+            match par_gz.flush() {
+                Err(err) => break err,
+                Ok(()) => assert!(
+                    std::time::Instant::now() < deadline,
+                    "flush() never reported the sink's failure"
+                ),
+            }
+        };
+        assert!(
+            err.to_string().contains("sink is gone"),
+            "expected the sink's own error, got {:?}",
+            err
+        );
+
+        // As above: dropping after a failed flush must not panic either.
+    }
+
     #[test]
     fn test_simple_sync() {
         let dir = tempdir().unwrap();

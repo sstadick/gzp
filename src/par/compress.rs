@@ -242,6 +242,35 @@ where
         ParCompressBuilder::new()
     }
 
+    /// Join the writer thread and produce the error it exited with.
+    ///
+    /// Call this when a send fails: the send only fails because the receiving end has
+    /// hung up, which means the writer thread is already gone and the real cause is
+    /// whatever it returned. Taking the handle here also disarms [`Drop`], whose guard
+    /// requires all three of `tx_compressor` / `tx_writer` / `handle` to be `Some`, so a
+    /// teardown that has already failed is never silently retried by the drop that
+    /// follows it.
+    fn writer_thread_error(&mut self) -> io::Error {
+        let handle = match self.handle.take() {
+            Some(handle) => handle,
+            // Already joined by an earlier failure on this same object, which reported
+            // the underlying error to whoever hit it first.
+            None => return io::Error::other(GzpError::ChannelSend),
+        };
+        // If an error occurred sending, that means the receivers have dropped and the
+        // compressor thread hit an error. Collect that error here, and if it was an Io
+        // error, preserve it.
+        let error = match handle.join() {
+            Ok(result) => result.map(|_| ()),
+            Err(e) => std::panic::resume_unwind(e),
+        };
+        match error {
+            Ok(()) => std::panic::resume_unwind(Box::new(error)), // something weird happened
+            Err(GzpError::Io(ioerr)) => ioerr,
+            Err(err) => io::Error::other(err),
+        }
+    }
+
     /// Launch threads to compress chunks and coordinate sending compressed results
     /// to the writer.
     #[allow(clippy::needless_collect)]
@@ -348,12 +377,12 @@ where
                 .as_ref()
                 .unwrap()
                 .send(r)
-                .map_err(io::Error::other)?;
+                .map_err(|_send_error| self.writer_thread_error())?;
             self.tx_compressor
                 .as_ref()
                 .unwrap()
                 .send(m)
-                .map_err(io::Error::other)?;
+                .map_err(|_send_error| self.writer_thread_error())?;
             if self.buffer.is_empty() {
                 break;
             }
@@ -374,6 +403,8 @@ where
     /// # Errors
     /// - [`GzpError`] if there is an issue flushing the last blocks or an issue joining on the writer thread
     ///
+    /// A `finish` that returns `Err` has already joined the writer thread and left this
+    /// object inert, so the [`Drop`] that follows will not try the teardown again.
     fn finish(&mut self) -> Result<W, GzpError> {
         self.flush_last(true)?;
 
@@ -381,9 +412,16 @@ where
         // while !self.tx_writer.as_ref().unwrap().is_empty() {}
         drop(self.tx_compressor.take());
         drop(self.tx_writer.take());
-        match self.handle.take().unwrap().join() {
-            Ok(result) => result,
-            Err(e) => std::panic::resume_unwind(e),
+        match self.handle.take() {
+            Some(handle) => match handle.join() {
+                Ok(result) => result,
+                Err(e) => std::panic::resume_unwind(e),
+            },
+            // Not reachable today: the handle is only taken on a path that also closes
+            // the channels `flush_last` sends on, so the `?` above returns first. It is
+            // an error rather than an `unwrap` because that reasoning is what this whole
+            // function got wrong before.
+            None => Err(GzpError::ChannelSend),
         }
     }
 }
@@ -425,36 +463,12 @@ where
                 .as_ref()
                 .unwrap()
                 .send(r)
-                .map_err(|_send_error| {
-                    // If an error occured sending, that means the recievers have dropped an the compressor thread hit an error
-                    // Collect that error here, and if it was an Io error, preserve it
-                    let error = match self.handle.take().unwrap().join() {
-                        Ok(result) => result.map(|_| ()),
-                        Err(e) => std::panic::resume_unwind(e),
-                    };
-                    match error {
-                        Ok(()) => std::panic::resume_unwind(Box::new(error)), // something weird happened
-                        Err(GzpError::Io(ioerr)) => ioerr,
-                        Err(err) => io::Error::other(err),
-                    }
-                })?;
+                .map_err(|_send_error| self.writer_thread_error())?;
             self.tx_compressor
                 .as_ref()
                 .unwrap()
                 .send(m)
-                .map_err(|_send_error| {
-                    // If an error occured sending, that means the recievers have dropped an the compressor thread hit an error
-                    // Collect that error here, and if it was an Io error, preserve it
-                    let error = match self.handle.take().unwrap().join() {
-                        Ok(result) => result.map(|_| ()),
-                        Err(e) => std::panic::resume_unwind(e),
-                    };
-                    match error {
-                        Ok(()) => std::panic::resume_unwind(Box::new(error)), // something weird happened
-                        Err(GzpError::Io(ioerr)) => ioerr,
-                        Err(err) => io::Error::other(err),
-                    }
-                })?;
+                .map_err(|_send_error| self.writer_thread_error())?;
             self.buffer
                 .reserve(self.buffer_size.saturating_sub(self.buffer.len()));
         }
