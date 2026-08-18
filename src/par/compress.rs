@@ -344,21 +344,41 @@ where
                 self.dictionary = Some(m.buffer.slice(m.buffer.len() - DICT_SIZE..));
             }
 
-            self.tx_writer
-                .as_ref()
-                .unwrap()
-                .send(r)
-                .map_err(io::Error::other)?;
-            self.tx_compressor
-                .as_ref()
-                .unwrap()
-                .send(m)
-                .map_err(io::Error::other)?;
+            let send_result = self.tx_writer.as_ref().unwrap().send(r);
+            if let Err(error) = send_result {
+                return Err(self.recover_send_error(error));
+            }
+
+            let send_result = self.tx_compressor.as_ref().unwrap().send(m);
+            if let Err(error) = send_result {
+                return Err(self.recover_send_error(error));
+            }
             if self.buffer.is_empty() {
                 break;
             }
         }
         Ok(())
+    }
+
+    /// Shut down the pipeline and recover its error after a channel send fails.
+    ///
+    /// Taking all three resources before joining also disarms [`Drop`], so an error
+    /// returned by `write`, `flush`, or `finish` cannot trigger a second teardown.
+    fn recover_send_error<T>(&mut self, send_error: flume::SendError<T>) -> io::Error {
+        let handle = self.handle.take().unwrap();
+        drop(send_error);
+        drop(self.tx_compressor.take());
+        drop(self.tx_writer.take());
+
+        let error = match handle.join() {
+            Ok(result) => result.map(|_| ()),
+            Err(error) => std::panic::resume_unwind(error),
+        };
+        match error {
+            Ok(()) => std::panic::resume_unwind(Box::new(error)),
+            Err(GzpError::Io(error)) => error,
+            Err(error) => io::Error::other(error),
+        }
     }
 }
 
@@ -421,40 +441,15 @@ where
             } else {
                 None
             };
-            self.tx_writer
-                .as_ref()
-                .unwrap()
-                .send(r)
-                .map_err(|_send_error| {
-                    // If an error occured sending, that means the recievers have dropped an the compressor thread hit an error
-                    // Collect that error here, and if it was an Io error, preserve it
-                    let error = match self.handle.take().unwrap().join() {
-                        Ok(result) => result.map(|_| ()),
-                        Err(e) => std::panic::resume_unwind(e),
-                    };
-                    match error {
-                        Ok(()) => std::panic::resume_unwind(Box::new(error)), // something weird happened
-                        Err(GzpError::Io(ioerr)) => ioerr,
-                        Err(err) => io::Error::other(err),
-                    }
-                })?;
-            self.tx_compressor
-                .as_ref()
-                .unwrap()
-                .send(m)
-                .map_err(|_send_error| {
-                    // If an error occured sending, that means the recievers have dropped an the compressor thread hit an error
-                    // Collect that error here, and if it was an Io error, preserve it
-                    let error = match self.handle.take().unwrap().join() {
-                        Ok(result) => result.map(|_| ()),
-                        Err(e) => std::panic::resume_unwind(e),
-                    };
-                    match error {
-                        Ok(()) => std::panic::resume_unwind(Box::new(error)), // something weird happened
-                        Err(GzpError::Io(ioerr)) => ioerr,
-                        Err(err) => io::Error::other(err),
-                    }
-                })?;
+            let send_result = self.tx_writer.as_ref().unwrap().send(r);
+            if let Err(error) = send_result {
+                return Err(self.recover_send_error(error));
+            }
+
+            let send_result = self.tx_compressor.as_ref().unwrap().send(m);
+            if let Err(error) = send_result {
+                return Err(self.recover_send_error(error));
+            }
             self.buffer
                 .reserve(self.buffer_size.saturating_sub(self.buffer.len()));
         }
@@ -465,5 +460,201 @@ where
     /// Flush this output stream, ensuring all intermediately buffered contents are sent.
     fn flush(&mut self) -> std::io::Result<()> {
         self.flush_last(false)
+    }
+}
+
+#[cfg(all(test, feature = "deflate"))]
+mod tests {
+    use std::io::{self, Write};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    use crate::deflate::Gzip;
+    use crate::{GzpError, ZWriter};
+
+    use super::{MaybeScopedJoinHandle, ParCompress, ParCompressBuilder};
+
+    #[derive(Debug)]
+    struct FailingWriter {
+        write_attempted: mpsc::Sender<()>,
+    }
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            let _ = self.write_attempted.send(());
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "sink is gone"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct PanickingWriter {
+        write_attempted: mpsc::Sender<()>,
+    }
+
+    impl Write for PanickingWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            let _ = self.write_attempted.send(());
+            panic!("sink panicked");
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn wait_for_writer_thread<W: Write>(compressor: &ParCompress<'_, Gzip, W>) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let is_finished = match compressor.handle.as_ref().unwrap() {
+                MaybeScopedJoinHandle::Static(handle) => handle.is_finished(),
+                MaybeScopedJoinHandle::Scoped(handle) => handle.is_finished(),
+            };
+            if is_finished {
+                return;
+            }
+            assert!(Instant::now() < deadline, "writer thread did not finish");
+            std::thread::yield_now();
+        }
+    }
+
+    fn compressor_with_failed_writer() -> ParCompress<'static, Gzip, FailingWriter> {
+        let (write_attempted, write_attempted_rx) = mpsc::channel();
+        let compressor = ParCompressBuilder::new()
+            .num_threads(1)
+            .unwrap()
+            .from_writer(FailingWriter { write_attempted });
+
+        write_attempted_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("writer did not attempt the gzip header");
+        wait_for_writer_thread(&compressor);
+        compressor
+    }
+
+    fn assert_pipeline_closed<W: Write>(compressor: &ParCompress<'_, Gzip, W>) {
+        assert!(compressor.handle.is_none());
+        assert!(compressor.tx_compressor.is_none());
+        assert!(compressor.tx_writer.is_none());
+    }
+
+    fn assert_sink_error(error: GzpError) {
+        match error {
+            GzpError::Io(error) => {
+                assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+                assert_eq!(error.to_string(), "sink is gone");
+            }
+            error => panic!("expected the sink's I/O error, got {:?}", error),
+        }
+    }
+
+    #[test]
+    fn finish_error_is_not_retried_by_drop() {
+        let mut compressor = compressor_with_failed_writer();
+        let result = catch_unwind(AssertUnwindSafe(move || {
+            let result = compressor.finish();
+            assert_pipeline_closed(&compressor);
+            drop(compressor);
+            result
+        }));
+
+        let error = result
+            .expect("dropping after a failed finish must not panic")
+            .expect_err("finish should report the sink error");
+        assert_sink_error(error);
+    }
+
+    #[test]
+    fn flush_error_is_not_retried_by_drop() {
+        let mut compressor = compressor_with_failed_writer();
+        let result = catch_unwind(AssertUnwindSafe(move || {
+            let result = compressor.flush();
+            assert_pipeline_closed(&compressor);
+            drop(compressor);
+            result
+        }));
+
+        let error = result
+            .expect("dropping after a failed flush must not panic")
+            .expect_err("flush should report the sink error");
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(error.to_string(), "sink is gone");
+    }
+
+    #[test]
+    fn write_error_still_recovers_the_sink_error() {
+        let mut compressor = compressor_with_failed_writer();
+        let input = vec![0; compressor.buffer_size + 1];
+        let result = catch_unwind(AssertUnwindSafe(move || {
+            let result = compressor.write(&input);
+            assert_pipeline_closed(&compressor);
+            drop(compressor);
+            result
+        }));
+
+        let error = result
+            .expect("dropping after a failed write must not panic")
+            .expect_err("write should report the sink error");
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(error.to_string(), "sink is gone");
+    }
+
+    #[test]
+    fn scoped_finish_error_is_not_retried_by_drop() {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            std::thread::scope(|scope| {
+                let (write_attempted, write_attempted_rx) = mpsc::channel();
+                let mut compressor = ParCompressBuilder::new()
+                    .num_threads(1)
+                    .unwrap()
+                    .from_borrowed_writer(FailingWriter { write_attempted }, scope);
+
+                write_attempted_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("writer did not attempt the gzip header");
+                wait_for_writer_thread(&compressor);
+
+                let error = compressor
+                    .finish()
+                    .expect_err("finish should report the sink error");
+                assert_pipeline_closed(&compressor);
+                assert_sink_error(error);
+                drop(compressor);
+            });
+        }));
+
+        result.expect("dropping a failed scoped compressor must not panic");
+    }
+
+    #[test]
+    fn writer_panic_is_resumed_only_once() {
+        let (write_attempted, write_attempted_rx) = mpsc::channel();
+        let mut compressor = ParCompressBuilder::new()
+            .num_threads(1)
+            .unwrap()
+            .from_writer(PanickingWriter { write_attempted });
+        write_attempted_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("writer did not attempt the gzip header");
+        wait_for_writer_thread(&compressor);
+
+        let result = catch_unwind(AssertUnwindSafe(move || {
+            let panic = catch_unwind(AssertUnwindSafe(|| compressor.finish()));
+            assert_pipeline_closed(&compressor);
+            drop(compressor);
+            panic
+        }))
+        .expect("dropping after resuming the writer panic must not panic again");
+
+        let panic = result.expect_err("the writer panic should be resumed");
+        let message = panic
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| panic.downcast_ref::<String>().map(String::as_str));
+        assert_eq!(message, Some("sink panicked"));
     }
 }
