@@ -364,6 +364,7 @@ where
     ///
     /// Taking all three resources before joining also disarms [`Drop`], so an error
     /// returned by `write`, `flush`, or `finish` cannot trigger a second teardown.
+    #[cold]
     fn recover_send_error<T>(&mut self, send_error: flume::SendError<T>) -> io::Error {
         let handle = self.handle.take().unwrap();
         drop(send_error);

@@ -1,3 +1,8 @@
+# v2.0.3
+
+- fix: Prevent `ParCompress` from attempting teardown twice after an internal writer error, so `write`, `flush`, and `finish` preserve the original error instead of panicking during `Drop` ([#68](https://github.com/sstadick/gzp/issues/68)).
+- perf: Keep send-error recovery on the cold error path so successful compression does not pay for teardown handling.
+
 # v2.0.2
 
 - fix: https://github.com/sstadick/gzp/issues/65, incorrect feature flags that get exposed when compiling without default features for snappy only.
