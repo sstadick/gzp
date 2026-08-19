@@ -1,3 +1,8 @@
+# v2.0.4
+
+- chore: Refresh `bytes`, `thiserror`, `libdeflater`, `proptest`, and `tempfile`, and move the lockfile off the yanked `spin` 0.9.8 release.
+- chore: Update the pinned `actions/checkout` workflow action to v7.0.1.
+
 # v2.0.3
 
 - fix: Prevent `ParCompress` from attempting teardown twice after an internal writer error, so `write`, `flush`, and `finish` preserve the original error instead of panicking during `Drop` ([#68](https://github.com/sstadick/gzp/issues/68)).
