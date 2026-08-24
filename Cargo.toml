@@ -59,7 +59,7 @@ log = "0.4.28"
 [dev-dependencies]
 proptest = "1.11.0"
 tempfile = "3.27.0"
-criterion = "0.7.0"
+criterion = "0.8.2"
 
 [[bench]]
 name = "bench"
